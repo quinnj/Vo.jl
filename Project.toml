@@ -1,0 +1,14 @@
+name = "Vo"
+uuid = "46916a23-5c37-4b23-b62b-45b422578c04"
+version = "0.1.0"
+authors = ["Jacob Quinn <quinn.jacobd@gmail.com>"]
+
+[deps]
+Agentif = "b1e21dde-9d8e-492f-89d0-ee48af23bfc5"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Harbor = "af79dbb9-1a80-47ad-8928-192a4af69376"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Slack = "4d517630-ce0d-4555-8fa7-416d9f8f5684"
+Tempus = "e6262be2-5787-4bdc-bc3f-4b5a3442fa30"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
