@@ -3,9 +3,12 @@ module Vo
 using Agentif
 using Dates
 using Harbor
+using HTTP
 using JSON
 using Logging
+using Servo
 using Slack
+using StructUtils
 using Tempus
 using UUIDs
 
@@ -16,16 +19,23 @@ const ENV_AGENT_MODEL = "VO_AGENT_MODEL"
 const ENV_AGENT_API_KEY = "VO_AGENT_API_KEY"
 const ENV_DATA_DIR = "VO_DATA_DIR"
 const ENV_DOCKER_NAME = "VO_DOCKER_NAME"
+const ENV_HTTP_HOST = "VO_HTTP_HOST"
+const ENV_HTTP_PORT = "VO_HTTP_PORT"
 const CONTAINER_CALLBACK_PORT = 1455
 const CONTAINER_ROOT = "/data"
 const DM_DIR = "dms"
+const HTTP_SESSION_DIR = "http-sessions"
+const HTTP_SCHEDULED_DIR = "http-scheduled-sessions"
 const STREAM_FLUSH_SECONDS = 0.3
 const THINKING_PREFIX = "> "
 const THINKING_SEPARATOR = "\n\n"
 const TEMPUS_STORE_FILENAME = "tempus-store.bin"
+const HTTP_SCHEDULED_STORE_FILENAME = "http-scheduled-store.bin"
 const SCHEDULED_JOB_PREFIX = "scheduled"
+const HTTP_SCHEDULED_JOB_PREFIX = "http-scheduled"
 const SCHEDULED_USER = "scheduled"
 const SCHEDULED_DISPATCH = Ref{Union{Nothing,Function}}(nothing)
+const HTTP_SCHEDULED_DISPATCH = Ref{Union{Nothing,Function}}(nothing)
 const CODEX_DEFAULT_TIMEOUT = 600
 
 struct SlackEvent
@@ -1090,5 +1100,7 @@ function main()
     end
     return nothing
 end
+
+include("http_server.jl")
 
 end

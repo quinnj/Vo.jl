@@ -7,8 +7,29 @@ authors = ["Jacob Quinn <quinn.jacobd@gmail.com>"]
 Agentif = "b1e21dde-9d8e-492f-89d0-ee48af23bfc5"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Harbor = "af79dbb9-1a80-47ad-8928-192a4af69376"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Postgres = "8f23287e-300e-4f50-bc2b-9f1dfe95da84"
+Servo = "169596a4-850b-412e-9996-453439081821"
 Slack = "4d517630-ce0d-4555-8fa7-416d9f8f5684"
+StructUtils = "ec057cc2-7a8d-4b58-b3b3-92acb9f63b42"
 Tempus = "e6262be2-5787-4bdc-bc3f-4b5a3442fa30"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+
+[sources]
+Agentif = {path = "../Agentif"}
+Harbor = {path = "../Harbor"}
+HTTP = {path = "../HTTP"}
+JSON = {path = "../JSON"}
+Postgres = {path = "../Postgres"}
+Servo = {path = "../Servo"}
+Slack = {path = "../Slack"}
+StructUtils = {path = "../StructUtils"}
+Tempus = {path = "../Tempus"}
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

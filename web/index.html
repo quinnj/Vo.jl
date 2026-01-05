@@ -1,0 +1,1416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #1c1a16;
+  --ink-muted: #5a5346;
+  --bg: #f6f1e8;
+  --bg-2: #eef4f1;
+  --card: #fffaf3;
+  --card-2: #f4eee4;
+  --accent: #1f6f5c;
+  --accent-strong: #155744;
+  --danger: #d14438;
+  --border: #e2d7c6;
+  --sidebar-bg: #1a2622;
+  --sidebar-text: #f1efe6;
+  --sidebar-muted: #b6b0a2;
+  --shadow: 0 12px 30px rgba(24, 21, 16, 0.12);
+  --page-bg: radial-gradient(circle at 15% 10%, #fff5e1 0%, transparent 45%),
+              radial-gradient(circle at 85% 0%, #e6f4ef 0%, transparent 48%),
+              linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+  --page-pattern: repeating-linear-gradient(120deg, rgba(255, 255, 255, 0.35) 0 1px, transparent 1px 14px);
+  --pattern-opacity: 0.25;
+  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-strong: rgba(255, 255, 255, 0.8);
+  --input-bg: #ffffff;
+  --error-bg: #fdeeee;
+  --error-border: rgba(209, 68, 56, 0.3);
+  --code-ink: #3b352c;
+  --code-bg: rgba(28, 26, 22, 0.05);
+  --dash-border: rgba(28, 26, 22, 0.2);
+  --soft-border: rgba(28, 26, 22, 0.1);
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Space Grotesk", "Noto Sans", sans-serif;
+  color: var(--ink);
+  background: var(--page-bg);
+  overflow: hidden;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: var(--page-pattern);
+  opacity: var(--pattern-opacity);
+  pointer-events: none;
+}
+body[data-theme="dark"] {
+  --ink: #f3f1ea;
+  --ink-muted: #a8a194;
+  --bg: #0f1512;
+  --bg-2: #0b100e;
+  --card: #141b17;
+  --card-2: #1a221d;
+  --accent: #3aa379;
+  --accent-strong: #2c8a66;
+  --danger: #ff6b5f;
+  --border: #2a352e;
+  --sidebar-bg: #0b120f;
+  --sidebar-text: #eef3ec;
+  --sidebar-muted: #8f9b91;
+  --shadow: 0 16px 32px rgba(0, 0, 0, 0.4);
+  --page-bg: radial-gradient(circle at 20% 15%, rgba(40, 68, 58, 0.35) 0%, transparent 45%),
+              radial-gradient(circle at 80% 0%, rgba(21, 40, 34, 0.7) 0%, transparent 55%),
+              linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+  --page-pattern: repeating-linear-gradient(120deg, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 14px);
+  --pattern-opacity: 0.35;
+  --glass-bg: rgba(10, 15, 13, 0.8);
+  --glass-strong: rgba(10, 15, 13, 0.9);
+  --input-bg: #101714;
+  --error-bg: #2a1413;
+  --error-border: rgba(255, 107, 95, 0.35);
+  --code-ink: #d7cebf;
+  --code-bg: rgba(0, 0, 0, 0.35);
+  --dash-border: rgba(255, 255, 255, 0.2);
+  --soft-border: rgba(255, 255, 255, 0.12);
+}
+.app {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+  position: relative;
+  animation: fadein 0.6s ease;
+  height: 100vh;
+  overflow: hidden;
+}
+.topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: var(--glass-bg);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+  z-index: 6;
+}
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.nav-toggle,
+.theme-toggle {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--glass-strong);
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.nav-toggle:hover,
+.theme-toggle:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
+}
+.nav-toggle svg,
+.theme-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.theme-toggle .icon-sun {
+  display: none;
+}
+body[data-theme="dark"] .theme-toggle .icon-sun {
+  display: block;
+}
+body[data-theme="dark"] .theme-toggle .icon-moon {
+  display: none;
+}
+.mobile-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 7, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 4;
+}
+body.nav-open .mobile-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+.sidebar {
+  background: var(--sidebar-bg);
+  color: var(--sidebar-text);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px 20px 20px;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.08);
+  grid-row: 2;
+  grid-column: 1;
+  z-index: 5;
+  min-height: 0;
+  overflow: hidden;
+  height: 100%;
+}
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.brand {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.sidebar .theme-toggle {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sidebar-text);
+  box-shadow: none;
+}
+.sidebar .theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: none;
+}
+.sidebar-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sidebar-section.collapsed .section-list {
+  display: none;
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--sidebar-text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.section-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  transition: transform 0.2s ease;
+}
+.sidebar-section.collapsed .section-toggle svg {
+  transform: rotate(-90deg);
+}
+.section-new,
+.new-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--sidebar-text);
+  border: none;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+.section-new:hover,
+.new-session:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.2);
+}
+.section-new svg,
+.new-session svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.session-item {
+  position: relative;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border 0.2s ease, background 0.2s ease;
+}
+.session-item.active {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.session-link {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 14px 16px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.session-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--sidebar-text);
+}
+.session-preview {
+  font-size: 12px;
+  color: var(--sidebar-muted);
+}
+.session-status {
+  position: absolute;
+  top: 14px;
+  right: 48px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.session-status .agent-spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  border-top-color: var(--sidebar-text);
+}
+.session-empty {
+  color: var(--sidebar-muted);
+  font-size: 13px;
+  padding: 12px 8px;
+}
+.session-delete {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--danger);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  cursor: pointer;
+}
+.session-item:hover .session-delete {
+  opacity: 1;
+  transform: scale(1);
+}
+.session-delete svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.session-child {
+  margin-left: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.session-child .session-link {
+  padding: 10px 12px 12px;
+}
+.session-child .session-title {
+  font-size: 13px;
+}
+.session-child .session-preview {
+  font-size: 11px;
+}
+.scheduled-item {
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border 0.2s ease, background 0.2s ease;
+}
+.scheduled-item.active {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.scheduled-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scheduled-toggle {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sidebar-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+.scheduled-toggle:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.scheduled-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  transition: transform 0.2s ease;
+}
+.scheduled-item.collapsed .scheduled-toggle svg {
+  transform: rotate(-90deg);
+}
+.scheduled-link {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--sidebar-text);
+  text-align: left;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+.scheduled-delete {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--danger);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  cursor: pointer;
+}
+.scheduled-item:hover .scheduled-delete {
+  opacity: 1;
+  transform: scale(1);
+}
+.scheduled-delete svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.scheduled-meta {
+  font-size: 11px;
+  color: var(--sidebar-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scheduled-meta code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--sidebar-text);
+}
+.scheduled-preview {
+  font-size: 12px;
+  color: var(--sidebar-muted);
+}
+.scheduled-invalid {
+  font-size: 11px;
+  color: var(--danger);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.scheduled-valid {
+  font-size: 11px;
+  color: var(--accent-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.scheduled-children {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scheduled-item.collapsed .scheduled-children {
+  display: none;
+}
+.scheduled-empty {
+  font-size: 12px;
+  color: var(--sidebar-muted);
+  margin-left: 12px;
+}
+.schedule-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+}
+.schedule-body {
+  padding: 24px 32px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.scheduled-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scheduled-field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.scheduled-textarea,
+.scheduled-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-family: "Space Grotesk", "Noto Sans", sans-serif;
+  font-size: 15px;
+  background: var(--input-bg);
+  color: var(--ink);
+}
+.scheduled-textarea:focus,
+.scheduled-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 111, 92, 0.12);
+}
+.scheduled-textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+.scheduled-input.invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(209, 68, 56, 0.15);
+}
+.cron-helper {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.scheduled-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scheduled-runs {
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: var(--glass-strong);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.scheduled-runs-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.scheduled-runs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.scheduled-runs-empty {
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.session-run {
+  background: var(--card-2);
+  border: 1px solid var(--border);
+}
+.session-run .session-title {
+  color: var(--ink);
+}
+.session-run .session-preview {
+  color: var(--ink-muted);
+}
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  grid-row: 2;
+  grid-column: 2;
+}
+#session-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.session-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+}
+.session-header {
+  padding: 28px 32px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+}
+.session-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.session-title-main {
+  font-size: 22px;
+  font-weight: 600;
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+}
+.session-header-row .session-title-main {
+  flex: 1;
+}
+.session-title-main.editable {
+  cursor: text;
+}
+.session-title-main.editable:hover {
+  text-decoration: underline;
+}
+.session-title-input {
+  width: 100%;
+  font-size: 22px;
+  font-weight: 600;
+  font-family: "Space Grotesk", "Noto Sans", sans-serif;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  background: var(--input-bg);
+  color: var(--ink);
+}
+.session-header-row .session-title-input {
+  flex: 1;
+  width: auto;
+}
+.session-title-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 111, 92, 0.12);
+}
+.run-now-button {
+  border: none;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+.run-now-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(31, 111, 92, 0.25);
+}
+.run-now-button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  box-shadow: none;
+  transform: none;
+}
+.session-meta {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-top: 6px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.session-id {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+.messages {
+  flex: 1;
+  padding: 28px 32px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.msg {
+  display: flex;
+  gap: 12px;
+  animation: rise 0.4s ease;
+}
+.msg-user {
+  justify-content: flex-end;
+}
+.msg-user .msg-bubble {
+  background: var(--accent);
+  color: white;
+}
+.msg-assistant .msg-bubble {
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+.msg-tool .msg-bubble {
+  background: var(--card-2);
+  border: 1px dashed var(--dash-border);
+}
+.msg-error .msg-bubble {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+}
+.msg-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 13px;
+}
+.msg-bubble {
+  max-width: 70%;
+  padding: 16px 18px;
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+}
+.msg-meta {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  margin-bottom: 8px;
+}
+.msg-user .msg-meta {
+  color: rgba(255, 255, 255, 0.8);
+}
+.msg-text {
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.msg-thinking {
+  margin-top: 12px;
+  border-top: 1px solid var(--soft-border);
+  padding-top: 10px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.msg-thinking summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+.msg-thinking pre {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  margin-top: 8px;
+  color: var(--code-ink);
+}
+.msg-status {
+  margin-top: 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-muted);
+}
+.msg-status.done {
+  color: var(--accent-strong);
+}
+.msg-code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  background: var(--code-bg);
+  padding: 12px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+}
+.composer {
+  padding: 18px 32px 28px;
+  border-top: 1px solid var(--border);
+  background: var(--glass-strong);
+  backdrop-filter: blur(8px);
+}
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  transition: opacity 0.2s ease, max-height 0.2s ease;
+}
+.agent-status.active {
+  opacity: 1;
+  max-height: 40px;
+  margin-bottom: 10px;
+}
+.agent-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--soft-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.prompt-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.prompt-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 16px;
+  font-size: 14px;
+  font-family: "Space Grotesk", "Noto Sans", sans-serif;
+  background: var(--input-bg);
+  color: var(--ink);
+  resize: vertical;
+  min-height: 88px;
+}
+.prompt-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 111, 92, 0.15);
+}
+.composer-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.send-button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+.zero-state {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 40px;
+}
+.zero-card {
+  background: var(--card);
+  padding: 32px 36px;
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  text-align: center;
+  max-width: 460px;
+}
+.loading-state {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 40px;
+}
+.loading-card {
+  background: var(--card);
+  padding: 28px 32px;
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--ink-muted);
+}
+.zero-card h2 {
+  margin: 0 0 12px;
+  font-size: 24px;
+}
+.zero-card p {
+  margin: 0;
+  color: var(--ink-muted);
+}
+.sse-sink {
+  display: none;
+}
+@keyframes fadein {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .topbar {
+    display: flex;
+  }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(82vw, 320px);
+    padding: 20px 18px;
+    left: -100%;
+    transform: none;
+    transition: left 0.25s ease;
+    box-shadow: 12px 0 28px rgba(0, 0, 0, 0.35);
+    height: 100dvh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    overscroll-behavior: contain;
+  }
+  body.nav-open .sidebar {
+    left: 0;
+  }
+  .mobile-scrim {
+    display: block;
+  }
+  .sidebar-header {
+    display: none;
+  }
+  .sidebar-body {
+    max-height: none;
+    flex: 0 0 auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+  .main {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
+  }
+  .schedule-body {
+    padding: 20px 20px 28px;
+  }
+  .session-header {
+    padding: 20px 20px 14px;
+  }
+  .session-header-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .session-title-main,
+  .session-title-input {
+    font-size: 20px;
+  }
+  .messages {
+    padding: 18px 18px 26px;
+  }
+  .msg-bubble {
+    max-width: 100%;
+  }
+  .composer {
+    padding: 14px 18px 22px;
+  }
+  .prompt-input {
+    min-height: 72px;
+  }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </button>
+    <div class="brand-row">
+      <div class="brand">Vo</div>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" aria-pressed="false" title="Switch to dark mode">
+        <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 0 1 9.5 3a9 9 0 1 0 11.5 11.5z"/></svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0-5h1.5v3H12V2zm0 17h1.5v3H12v-3zm10-7v1.5h-3V12h3zM5 12v1.5H2V12h3zm12.45-7.95l1.06 1.06-2.12 2.12-1.06-1.06 2.12-2.12zm-9.9 9.9l1.06 1.06-2.12 2.12-1.06-1.06 2.12-2.12zm9.9 2.12l-2.12-2.12 1.06-1.06 2.12 2.12-1.06 1.06zm-9.9-9.9L4.43 5.05 5.5 3.99 7.62 6.1 6.56 7.17z"/></svg>
+      </button>
+    </div>
+  </header>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="brand-row">
+        <div class="brand">Vo</div>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" aria-pressed="false" title="Switch to dark mode">
+          <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 0 1 9.5 3a9 9 0 1 0 11.5 11.5z"/></svg>
+          <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0-5h1.5v3H12V2zm0 17h1.5v3H12v-3zm10-7v1.5h-3V12h3zM5 12v1.5H2V12h3zm12.45-7.95l1.06 1.06-2.12 2.12-1.06-1.06 2.12-2.12zm-9.9 9.9l1.06 1.06-2.12 2.12-1.06-1.06 2.12-2.12zm9.9 2.12l-2.12-2.12 1.06-1.06 2.12 2.12-1.06 1.06zm-9.9-9.9L4.43 5.05 5.5 3.99 7.62 6.1 6.56 7.17z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="sidebar-body">
+      <div class="sidebar-section" data-section="schedule">
+        <div class="section-header">
+          <button class="section-toggle" type="button" data-section-toggle="schedule" aria-expanded="true">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6l3.5 4 3.5-4z"/></svg>
+            Schedule
+          </button>
+          <button class="section-new new-scheduled" hx-post="/ui/scheduled" hx-target="#scheduled-list" hx-swap="innerHTML" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+            New
+          </button>
+        </div>
+        <div id="scheduled-list" class="section-list scheduled-list" hx-get="/ui/scheduled" hx-trigger="load, every 60s" hx-swap="innerHTML" hx-vals='js:{active_session_id: window.voActiveSessionId || "", active_scheduled_id: window.voActiveScheduledId || ""}'></div>
+      </div>
+      <div class="sidebar-section" data-section="sessions">
+        <div class="section-header">
+          <button class="section-toggle" type="button" data-section-toggle="sessions" aria-expanded="true">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6l3.5 4 3.5-4z"/></svg>
+            Sessions
+          </button>
+          <button class="section-new new-session" hx-post="/ui/sessions" hx-target="#session-list" hx-swap="innerHTML" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+            New
+          </button>
+        </div>
+        <div id="session-list" class="section-list session-list" hx-get="/ui/sessions" hx-trigger="load, every 60s" hx-swap="innerHTML" hx-vals='js:{active_session_id: window.voActiveSessionId || ""}'></div>
+      </div>
+    </div>
+  </aside>
+  <div class="mobile-scrim" data-nav-close></div>
+  <main class="main">
+    <div id="session-view" hx-get="/ui/zero" hx-trigger="load" hx-swap="innerHTML"></div>
+  </main>
+</div>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<script src="/htmx-sse.js"></script>
+<script>
+(function() {
+  const sectionStateKey = "vo.sidebar.sections";
+  const scheduledStateKey = "vo.sidebar.scheduled";
+  const themeKey = "vo.theme";
+  const navOpenClass = "nav-open";
+  window.voActiveSessionId = window.voActiveSessionId || "";
+  window.voActiveScheduledId = window.voActiveScheduledId || "";
+  function loadState(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key) || "{}");
+    } catch {
+      return {};
+    }
+  }
+  function saveState(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+  }
+  function themeButtons() {
+    return Array.from(document.querySelectorAll("[data-theme-toggle]"));
+  }
+  function applyTheme(theme) {
+    const isDark = theme === "dark";
+    document.body.dataset.theme = isDark ? "dark" : "light";
+    const label = isDark ? "Switch to light mode" : "Switch to dark mode";
+    themeButtons().forEach(button => {
+      button.setAttribute("aria-pressed", isDark ? "true" : "false");
+      button.setAttribute("aria-label", label);
+      button.setAttribute("title", label);
+    });
+  }
+  function initTheme() {
+    let theme = localStorage.getItem(themeKey);
+    if (theme !== "light" && theme !== "dark") {
+      theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    applyTheme(theme);
+  }
+  function toggleTheme() {
+    const next = document.body.dataset.theme === "dark" ? "light" : "dark";
+    localStorage.setItem(themeKey, next);
+    applyTheme(next);
+  }
+  function setNavState(isOpen) {
+    document.body.classList.toggle(navOpenClass, isOpen);
+    const toggle = document.querySelector("[data-nav-toggle]");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    }
+  }
+  function toggleNav() {
+    setNavState(!document.body.classList.contains(navOpenClass));
+  }
+  function closeNav() {
+    setNavState(false);
+  }
+  const swipeState = {
+    active: false,
+    startX: 0,
+    startY: 0
+  };
+  function startSwipe(event) {
+    if (!event.touches || event.touches.length !== 1) {
+      return;
+    }
+    if (document.body.classList.contains(navOpenClass)) {
+      return;
+    }
+    const target = event.target;
+    if (target && target.closest && target.closest("input, textarea, select")) {
+      return;
+    }
+    const touch = event.touches[0];
+    swipeState.active = true;
+    swipeState.startX = touch.clientX;
+    swipeState.startY = touch.clientY;
+  }
+  function moveSwipe(event) {
+    if (!swipeState.active || !event.touches || event.touches.length !== 1) {
+      return;
+    }
+    const touch = event.touches[0];
+    const dx = touch.clientX - swipeState.startX;
+    const dy = touch.clientY - swipeState.startY;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    if (swipeState.startX > 40) {
+      return;
+    }
+    if (dx > 60 && absDx > absDy * 1.3) {
+      setNavState(true);
+      swipeState.active = false;
+    }
+  }
+  function endSwipe() {
+    swipeState.active = false;
+  }
+  function applySidebarState() {
+    const sectionState = loadState(sectionStateKey);
+    document.querySelectorAll(".sidebar-section").forEach(section => {
+      const sectionId = section.getAttribute("data-section") || "";
+      const collapsed = sectionState[sectionId] === true;
+      section.classList.toggle("collapsed", collapsed);
+      const toggle = section.querySelector("[data-section-toggle]");
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      }
+    });
+    const scheduledState = loadState(scheduledStateKey);
+    document.querySelectorAll(".scheduled-item").forEach(item => {
+      const scheduledId = item.getAttribute("data-scheduled-id") || "";
+      const collapsed = scheduledState[scheduledId] === true;
+      item.classList.toggle("collapsed", collapsed);
+      const toggle = item.querySelector("[data-scheduled-toggle]");
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      }
+    });
+  }
+  function updateActiveIds() {
+    const scheduleView = document.querySelector(".schedule-view");
+    const sessionView = document.querySelector(".session-view");
+    if (scheduleView) {
+      window.voActiveScheduledId = scheduleView.getAttribute("data-scheduled-id") || "";
+      window.voActiveSessionId = "";
+      return;
+    }
+    if (sessionView) {
+      window.voActiveSessionId = sessionView.getAttribute("data-session-id") || "";
+      window.voActiveScheduledId = "";
+      return;
+    }
+    window.voActiveSessionId = "";
+    window.voActiveScheduledId = "";
+  }
+  function updateUtcHelper() {
+    const offsetEl = document.querySelector("[data-utc-offset]");
+    const exampleEl = document.querySelector("[data-utc-example]");
+    if (!offsetEl || !exampleEl) {
+      return;
+    }
+    const offsetMinutes = new Date().getTimezoneOffset();
+    const absMinutes = Math.abs(offsetMinutes);
+    const hours = Math.floor(absMinutes / 60);
+    const minutes = absMinutes % 60;
+    const sign = offsetMinutes > 0 ? "-" : offsetMinutes < 0 ? "+" : "";
+    const offsetLabel = `UTC${sign}${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+    let relation = "local is UTC";
+    if (offsetMinutes !== 0) {
+      const direction = offsetMinutes > 0 ? "behind" : "ahead of";
+      const hourLabel = minutes === 0 ? `${hours} hours` : `${hours}h ${minutes}m`;
+      relation = `local is ${hourLabel} ${direction} UTC`;
+    }
+    offsetEl.textContent = `${offsetLabel} (${relation})`;
+    const localMinutes = 4 * 60;
+    const utcMinutes = ((localMinutes + offsetMinutes) % 1440 + 1440) % 1440;
+    const utcHour = Math.floor(utcMinutes / 60);
+    const utcMinute = utcMinutes % 60;
+    exampleEl.textContent = `${String(utcHour).padStart(2, "0")}:${String(utcMinute).padStart(2, "0")} UTC`;
+  }
+  function loadingSessionHtml() {
+    return (
+      '<div class="loading-state">' +
+        '<div class="loading-card">' +
+          '<div class="agent-spinner"></div>' +
+          '<div>Creating a new session...</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+  function loadingScheduledHtml() {
+    return (
+      '<div class="loading-state">' +
+        '<div class="loading-card">' +
+          '<div class="agent-spinner"></div>' +
+          '<div>Creating a scheduled session...</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+  function shouldStickToBottom(messages) {
+    return messages.scrollTop + messages.clientHeight >= messages.scrollHeight - 80;
+  }
+  function scrollMessages(force) {
+    const messages = document.querySelector("#messages");
+    if (!messages) {
+      return;
+    }
+    if (!force && !shouldStickToBottom(messages)) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      messages.scrollTop = messages.scrollHeight;
+    });
+  }
+  function resizePrompt(textarea) {
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = "auto";
+    const maxHeight = 220;
+    textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + "px";
+  }
+  function activePrompt() {
+    return document.querySelector("#prompt-input");
+  }
+  function closeStream(target) {
+    if (!target || !target.closest) {
+      return;
+    }
+    const root = target.closest("[sse-connect], [data-sse-connect]");
+    if (!root) {
+      return;
+    }
+    const internal = root["htmx-internal-data"];
+    const source = internal ? internal.sseEventSource : null;
+    if (source) {
+      source.close();
+    }
+  }
+  document.body.addEventListener("click", event => {
+    const themeToggle = event.target.closest("[data-theme-toggle]");
+    if (themeToggle) {
+      event.preventDefault();
+      toggleTheme();
+      return;
+    }
+    const navToggle = event.target.closest("[data-nav-toggle]");
+    if (navToggle) {
+      event.preventDefault();
+      toggleNav();
+      return;
+    }
+    const navClose = event.target.closest("[data-nav-close]");
+    if (navClose) {
+      closeNav();
+      return;
+    }
+    const navLink = event.target.closest(".session-link, .scheduled-link");
+    if (navLink) {
+      closeNav();
+    }
+    const sectionToggle = event.target.closest("[data-section-toggle]");
+    if (sectionToggle) {
+      event.preventDefault();
+      const sectionId = sectionToggle.getAttribute("data-section-toggle") || "";
+      const state = loadState(sectionStateKey);
+      state[sectionId] = !state[sectionId];
+      saveState(sectionStateKey, state);
+      applySidebarState();
+      return;
+    }
+    const scheduledToggle = event.target.closest("[data-scheduled-toggle]");
+    if (scheduledToggle) {
+      event.preventDefault();
+      const scheduledId = scheduledToggle.getAttribute("data-scheduled-toggle") || "";
+      const state = loadState(scheduledStateKey);
+      state[scheduledId] = !state[scheduledId];
+      saveState(scheduledStateKey, state);
+      applySidebarState();
+    }
+  });
+  document.body.addEventListener("htmx:sseMessage", event => {
+    scrollMessages(false);
+    const detail = event.detail;
+    const name = detail && detail.type ? String(detail.type) : "";
+    if (name === "AgentEvaluateEndEvent" || name === "AgentErrorEvent") {
+      closeStream(event.target);
+    }
+  });
+  document.body.addEventListener("htmx:afterSwap", event => {
+    if (!event.target) {
+      return;
+    }
+    if (event.target.id === "session-view") {
+      closeNav();
+    }
+    if (event.target.id === "session-view" || event.target.id === "messages") {
+      const input = activePrompt();
+      if (input) {
+        resizePrompt(input);
+        input.focus();
+      } else {
+        const scheduledPrompt = document.querySelector("#scheduled-prompt");
+        scheduledPrompt && scheduledPrompt.focus();
+      }
+      updateActiveIds();
+      updateUtcHelper();
+      scrollMessages(true);
+    }
+    if (event.target.id === "session-list" || event.target.id === "scheduled-list") {
+      applySidebarState();
+    }
+    if (event.target.id === "session-header" || event.target.id === "scheduled-header") {
+      const titleInput = event.target.querySelector(".session-title-input");
+      if (titleInput) {
+        titleInput.focus();
+        titleInput.select();
+      }
+    }
+  });
+  document.body.addEventListener("htmx:beforeRequest", event => {
+    if (!event.target) {
+      return;
+    }
+    if (event.target.classList && event.target.classList.contains("new-session")) {
+      const view = document.querySelector("#session-view");
+      if (view) {
+        view.innerHTML = loadingSessionHtml();
+      }
+    }
+    if (event.target.classList && event.target.classList.contains("new-scheduled")) {
+      const view = document.querySelector("#session-view");
+      if (view) {
+        view.innerHTML = loadingScheduledHtml();
+      }
+    }
+  });
+  document.body.addEventListener("input", event => {
+    if (event.target && event.target.id === "prompt-input") {
+      resizePrompt(event.target);
+    }
+  });
+  document.body.addEventListener("keydown", event => {
+    if (event.target && event.target.id === "prompt-input" && event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      const form = event.target.closest("form");
+      if (form) {
+        form.requestSubmit();
+      }
+    }
+  });
+  document.addEventListener("DOMContentLoaded", () => {
+    initTheme();
+    applySidebarState();
+    updateActiveIds();
+    updateUtcHelper();
+  });
+  document.addEventListener("touchstart", startSwipe, { passive: true });
+  document.addEventListener("touchmove", moveSwipe, { passive: true });
+  document.addEventListener("touchend", endSwipe, { passive: true });
+  document.addEventListener("touchcancel", endSwipe, { passive: true });
+})();
+</script>
+</body>
+</html>
