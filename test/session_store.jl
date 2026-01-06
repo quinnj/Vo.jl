@@ -2,7 +2,7 @@ function dummy_model()
     return Agentif.Model(; id="dummy", name="Dummy", api="openai-completions", provider="dummy", baseUrl="http://localhost", reasoning=false, input=["text"], cost=Dict("input" => 0.0, "output" => 0.0, "cacheRead" => 0.0, "cacheWrite" => 0.0), contextWindow=4096, maxTokens=256, headers=nothing, kw=(;))
 end
 
-function fake_evaluator(agent::Agentif.Agent, prompt::String, on_event::Function)
+function fake_evaluator(agent::Agentif.Agent, prompt::String, on_event::Function; append_input::Bool=true)
     on_event(Agentif.AgentEvaluateStartEvent())
     user = Agentif.UserMessage(prompt)
     assistant = Agentif.AssistantMessage(; text="Echo: $(prompt)")
@@ -68,4 +68,39 @@ end
         @test session.state.messages[2] isa Agentif.AssistantMessage
         @test session.title == "Hello"
     end
+end
+
+@testset "begin session response persists pending state" begin
+    mktempdir() do dir
+        session = Vo.new_session(dir; title=nothing)
+        started = Vo.begin_session_response!(dir, session.id, "Hello there")
+        @test started !== nothing
+        @test started.responding
+        @test started.pending_user == "Hello there"
+        @test started.pending_eval_id !== nothing
+        @test started.pending_eval_started_at === nothing
+        @test started.state.messages[end] isa Agentif.UserMessage
+        @test started.state.messages[end].text == "Hello there"
+    end
+end
+
+@testset "tool events do not override session preview" begin
+    mktempdir() do dir
+        session = Vo.new_session(dir; title=nothing)
+        session = Vo.begin_session_response!(dir, session.id, "Ping")
+        session === nothing && error("session should be available")
+        entry = Vo.ToolCallEntry(; call_id="demo", name="demo", arguments="{}", requested_at=1)
+        Vo.upsert_tool_call_entry!(dir, session, entry)
+        loaded = Vo.get_session(dir, session.id)
+        @test Vo.session_preview(loaded) == "Ping"
+    end
+end
+
+@testset "render assistant messages" begin
+    empty_html = Vo.render_messages_html(Agentif.AgentMessage[Agentif.AssistantMessage()])
+    @test isempty(empty_html)
+    no_thinking_html = Vo.render_messages_html(Agentif.AgentMessage[Agentif.AssistantMessage(; text="Hello")])
+    @test !occursin("<details class=\"msg-thinking\"", no_thinking_html)
+    reasoning_html = Vo.render_messages_html(Agentif.AgentMessage[Agentif.AssistantMessage(; reasoning="Why")])
+    @test occursin("<details class=\"msg-thinking\"", reasoning_html)
 end

@@ -732,6 +732,140 @@ body.nav-open .mobile-scrim {
   background: var(--card-2);
   border: 1px dashed var(--dash-border);
 }
+.msg-toolcalls .msg-bubble {
+  background: var(--card-2);
+  border: 1px dashed var(--dash-border);
+  max-width: 88%;
+}
+.msg-thinking-block .msg-bubble {
+  background: var(--card-2);
+  border: 1px solid var(--soft-border);
+}
+.thinking-details {
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.thinking-details summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+.thinking-details pre {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  margin-top: 8px;
+  color: var(--code-ink);
+}
+.stream-group {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.tool-call-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tool-call-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.tool-call-slot {
+  min-height: 36px;
+}
+.tool-call-empty {
+  opacity: 0;
+}
+.tool-call-bubble {
+  background: var(--glass-strong);
+  border: 1px solid var(--soft-border);
+  border-radius: 14px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.tool-call-request {
+  justify-self: end;
+}
+.tool-call-result {
+  justify-self: start;
+}
+.tool-call-error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+.tool-call-bubble summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.tool-call-bubble summary::-webkit-details-marker {
+  display: none;
+}
+.tool-call-bubble summary::after {
+  content: ">";
+  margin-left: auto;
+  color: var(--ink-muted);
+  transition: transform 0.2s ease;
+}
+.tool-call-bubble[open] summary::after {
+  transform: rotate(90deg);
+}
+.tool-call-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+.tool-call-snippet {
+  font-size: 12px;
+  color: var(--ink);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool-call-duration {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.tool-call-full {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  background: var(--code-bg);
+  padding: 8px;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  margin-top: 8px;
+  color: var(--code-ink);
+}
+.tool-call-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--soft-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.tool-call-row[data-executing="false"] .tool-call-spinner {
+  display: none;
+}
+@media (max-width: 720px) {
+  .tool-call-row {
+    grid-template-columns: 1fr;
+  }
+  .tool-call-request,
+  .tool-call-result {
+    justify-self: stretch;
+  }
+  .tool-call-empty {
+    display: none;
+  }
+}
 .msg-error .msg-bubble {
   background: var(--error-bg);
   border: 1px solid var(--error-border);
@@ -1179,7 +1313,7 @@ body.nav-open .mobile-scrim {
     const scheduledState = loadState(scheduledStateKey);
     document.querySelectorAll(".scheduled-item").forEach(item => {
       const scheduledId = item.getAttribute("data-scheduled-id") || "";
-      const collapsed = scheduledState[scheduledId] === true;
+      const collapsed = scheduledState[scheduledId] !== false;
       item.classList.toggle("collapsed", collapsed);
       const toggle = item.querySelector("[data-scheduled-toggle]");
       if (toggle) {
@@ -1325,9 +1459,11 @@ body.nav-open .mobile-scrim {
       event.preventDefault();
       const scheduledId = scheduledToggle.getAttribute("data-scheduled-toggle") || "";
       const state = loadState(scheduledStateKey);
-      state[scheduledId] = !state[scheduledId];
+      const collapsed = state[scheduledId] !== false;
+      state[scheduledId] = !collapsed;
       saveState(scheduledStateKey, state);
       applySidebarState();
+      return;
     }
   });
   document.body.addEventListener("htmx:sseMessage", event => {
@@ -1368,6 +1504,20 @@ body.nav-open .mobile-scrim {
         titleInput.select();
       }
     }
+  });
+  document.body.addEventListener("htmx:oobAfterSwap", event => {
+    if (!event.target) {
+      return;
+    }
+    if (event.target.id === "session-list" || event.target.id === "scheduled-list") {
+      applySidebarState();
+    }
+  });
+  document.body.addEventListener("htmx:afterSettle", () => {
+    if (!document.querySelector("#scheduled-list")) {
+      return;
+    }
+    applySidebarState();
   });
   document.body.addEventListener("htmx:beforeRequest", event => {
     if (!event.target) {

@@ -8,6 +8,8 @@
     pending_user::Union{Nothing,String} = nothing
     pending_assistant::Union{Nothing,String} = nothing
     pending_reasoning::Union{Nothing,String} = nothing
+    pending_eval_id::Union{Nothing,String} = nothing
+    pending_eval_started_at::Union{Nothing,String} = nothing
 end
 
 @kwarg mutable struct ScheduledSession
@@ -19,6 +21,18 @@ end
     created_at::String
     updated_at::String
     session_ids::Vector{String} = String[]
+end
+
+@kwarg mutable struct ToolCallEntry
+    call_id::String
+    name::String
+    arguments::String
+    requested_at::Int64
+    started_at::Union{Nothing,Int64} = nothing
+    finished_at::Union{Nothing,Int64} = nothing
+    duration_ms::Union{Nothing,Int64} = nothing
+    output::Union{Nothing,String} = nothing
+    is_error::Union{Nothing,Bool} = nothing
 end
 
 @kwarg struct NewSessionRequest
@@ -48,6 +62,55 @@ struct HttpState
     agent_config::AgentConfig
     tools::Vector{Agentif.AgentTool}
     base_dir::String
+end
+
+const SESSION_LOCKS = Dict{String,ReentrantLock}()
+const SESSION_LOCKS_GUARD = ReentrantLock()
+const SCHEDULED_LOCKS = Dict{String,ReentrantLock}()
+const SCHEDULED_LOCKS_GUARD = ReentrantLock()
+
+function session_lock(session_id::String)
+    lock(SESSION_LOCKS_GUARD)
+    try
+        lock_obj = get!(SESSION_LOCKS, session_id) do
+            ReentrantLock()
+        end
+        return lock_obj
+    finally
+        unlock(SESSION_LOCKS_GUARD)
+    end
+end
+
+function with_session_lock(f::Function, session_id::String)
+    lock_obj = session_lock(session_id)
+    lock(lock_obj)
+    try
+        return f()
+    finally
+        unlock(lock_obj)
+    end
+end
+
+function scheduled_lock(scheduled_id::String)
+    lock(SCHEDULED_LOCKS_GUARD)
+    try
+        lock_obj = get!(SCHEDULED_LOCKS, scheduled_id) do
+            ReentrantLock()
+        end
+        return lock_obj
+    finally
+        unlock(SCHEDULED_LOCKS_GUARD)
+    end
+end
+
+function with_scheduled_lock(f::Function, scheduled_id::String)
+    lock_obj = scheduled_lock(scheduled_id)
+    lock(lock_obj)
+    try
+        return f()
+    finally
+        unlock(lock_obj)
+    end
 end
 
 function http_host(default::String="0.0.0.0")
@@ -131,25 +194,29 @@ function scheduled_session_file_path(scheduled_dir::String, scheduled_id::String
 end
 
 function save_session!(sessions_dir::String, session::StoredSession)
-    isdir(sessions_dir) || mkpath(sessions_dir)
-    path = session_file_path(sessions_dir, session.id)
-    tmp_path = path * ".tmp"
-    open(tmp_path, "w") do io
-        write(io, JSON.json(session))
+    return with_session_lock(session.id) do
+        isdir(sessions_dir) || mkpath(sessions_dir)
+        path = session_file_path(sessions_dir, session.id)
+        tmp_path = path * "." * string(UUIDs.uuid4()) * ".tmp"
+        open(tmp_path, "w") do io
+            write(io, JSON.json(session))
+        end
+        mv(tmp_path, path; force=true)
+        return nothing
     end
-    mv(tmp_path, path; force=true)
-    return nothing
 end
 
 function save_scheduled_session!(scheduled_dir::String, session::ScheduledSession)
-    isdir(scheduled_dir) || mkpath(scheduled_dir)
-    path = scheduled_session_file_path(scheduled_dir, session.id)
-    tmp_path = path * ".tmp"
-    open(tmp_path, "w") do io
-        write(io, JSON.json(session))
+    return with_scheduled_lock(session.id) do
+        isdir(scheduled_dir) || mkpath(scheduled_dir)
+        path = scheduled_session_file_path(scheduled_dir, session.id)
+        tmp_path = path * "." * string(UUIDs.uuid4()) * ".tmp"
+        open(tmp_path, "w") do io
+            write(io, JSON.json(session))
+        end
+        mv(tmp_path, path; force=true)
+        return nothing
     end
-    mv(tmp_path, path; force=true)
-    return nothing
 end
 
 function load_session_file(path::String)
@@ -340,12 +407,14 @@ function delete_scheduled_session(state::HttpState, scheduled_id::String)
 end
 
 function add_scheduled_session_run!(scheduled_dir::String, scheduled::ScheduledSession, session_id::String)
-    latest = get_scheduled_session(scheduled_dir, scheduled.id)
-    latest === nothing && (latest = scheduled)
-    pushfirst!(latest.session_ids, session_id)
-    latest.updated_at = iso_now()
-    save_scheduled_session!(scheduled_dir, latest)
-    return latest
+    return with_scheduled_lock(scheduled.id) do
+        latest = get_scheduled_session(scheduled_dir, scheduled.id)
+        latest === nothing && (latest = scheduled)
+        pushfirst!(latest.session_ids, session_id)
+        latest.updated_at = iso_now()
+        save_scheduled_session!(scheduled_dir, latest)
+        return latest
+    end
 end
 
 function scheduled_session_in_progress(sessions_dir::String, scheduled::ScheduledSession)
@@ -416,83 +485,129 @@ function sync_http_scheduler!(state::HttpState)
 end
 
 function update_scheduled_session!(state::HttpState, scheduled_id::String; title::Union{Nothing,String}=nothing, prompt::Union{Nothing,String}=nothing, schedule::Union{Nothing,String}=nothing)
-    scheduled = get_scheduled_session(state.scheduled_dir, scheduled_id)
-    scheduled === nothing && return nothing
-    if title !== nothing
-        scheduled.title = normalize_title(title)
-    end
-    if prompt !== nothing
-        scheduled.prompt = normalize_prompt(prompt)
-        if scheduled.title === nothing && scheduled.prompt !== nothing
-            scheduled.title = derive_title(scheduled.prompt)
+    return with_scheduled_lock(scheduled_id) do
+        scheduled = get_scheduled_session(state.scheduled_dir, scheduled_id)
+        scheduled === nothing && return nothing
+        if title !== nothing
+            scheduled.title = normalize_title(title)
         end
+        if prompt !== nothing
+            scheduled.prompt = normalize_prompt(prompt)
+            if scheduled.title === nothing && scheduled.prompt !== nothing
+                scheduled.title = derive_title(scheduled.prompt)
+            end
+        end
+        if schedule !== nothing
+            scheduled.schedule = normalize_schedule_input(schedule)
+        end
+        scheduled.is_valid = scheduled_session_valid(scheduled.prompt, scheduled.schedule)
+        scheduled.updated_at = iso_now()
+        save_scheduled_session!(state.scheduled_dir, scheduled)
+        sync_scheduled_job!(state, scheduled)
+        return scheduled
     end
-    if schedule !== nothing
-        scheduled.schedule = normalize_schedule_input(schedule)
-    end
-    scheduled.is_valid = scheduled_session_valid(scheduled.prompt, scheduled.schedule)
-    scheduled.updated_at = iso_now()
-    save_scheduled_session!(state.scheduled_dir, scheduled)
-    sync_scheduled_job!(state, scheduled)
-    return scheduled
 end
 
 function begin_session_response!(sessions_dir::String, session_id::String, prompt::AbstractString)
-    session = get_session(sessions_dir, session_id)
-    session === nothing && return nothing
-    session.responding = true
-    session.pending_user = String(prompt)
-    session.pending_assistant = nothing
-    session.pending_reasoning = nothing
-    save_session!(sessions_dir, session)
-    return session
+    return with_session_lock(session_id) do
+        session = get_session(sessions_dir, session_id)
+        session === nothing && return nothing
+        session.responding && return nothing
+        session.responding = true
+        session.pending_user = String(prompt)
+        session.pending_assistant = nothing
+        session.pending_reasoning = nothing
+        session.pending_eval_id = string(UUIDs.uuid4())
+        session.pending_eval_started_at = nothing
+        last_msg = isempty(session.state.messages) ? nothing : session.state.messages[end]
+        if !(last_msg isa Agentif.UserMessage && last_msg.text == session.pending_user)
+            push!(session.state.messages, Agentif.UserMessage(session.pending_user))
+        end
+        session.updated_at = iso_now()
+        save_session!(sessions_dir, session)
+        return session
+    end
 end
 
 function finalize_session_response!(sessions_dir::String, session::StoredSession)
-    session.responding = false
-    session.pending_user = nothing
-    session.pending_assistant = nothing
-    session.pending_reasoning = nothing
-    save_session!(sessions_dir, session)
-    return session
+    return with_session_lock(session.id) do
+        session.responding = false
+        session.pending_user = nothing
+        session.pending_assistant = nothing
+        session.pending_reasoning = nothing
+        session.pending_eval_id = nothing
+        session.pending_eval_started_at = nothing
+        session.updated_at = iso_now()
+        save_session!(sessions_dir, session)
+        return session
+    end
+end
+
+function mark_session_eval_started!(sessions_dir::String, session::StoredSession)
+    return with_session_lock(session.id) do
+        session.pending_eval_started_at === nothing || return nothing
+        session.pending_eval_started_at = iso_now()
+        session.updated_at = iso_now()
+        save_session!(sessions_dir, session)
+        return session
+    end
 end
 
 function append_pending_assistant!(sessions_dir::String, session::StoredSession, delta::String)
-    if session.pending_assistant === nothing
-        session.pending_assistant = delta
-    else
-        session.pending_assistant *= delta
+    return with_session_lock(session.id) do
+        if session.pending_assistant === nothing
+            session.pending_assistant = delta
+        else
+            session.pending_assistant *= delta
+        end
+        session.updated_at = iso_now()
+        save_session!(sessions_dir, session)
+        return session
     end
-    save_session!(sessions_dir, session)
-    return session
 end
 
 function append_pending_reasoning!(sessions_dir::String, session::StoredSession, delta::String)
-    if session.pending_reasoning === nothing
-        session.pending_reasoning = delta
-    else
-        session.pending_reasoning *= delta
+    return with_session_lock(session.id) do
+        if session.pending_reasoning === nothing
+            session.pending_reasoning = delta
+        else
+            session.pending_reasoning *= delta
+        end
+        session.updated_at = iso_now()
+        save_session!(sessions_dir, session)
+        return session
     end
-    save_session!(sessions_dir, session)
-    return session
+end
+
+function commit_pending_output!(sessions_dir::String, session::StoredSession)
+    return with_session_lock(session.id) do
+        text_value = session.pending_assistant === nothing ? "" : session.pending_assistant
+        reasoning_value = session.pending_reasoning === nothing ? "" : session.pending_reasoning
+        isempty(text_value) && isempty(reasoning_value) && return session
+        message = Agentif.AssistantMessage(; text=text_value, reasoning=reasoning_value, kind="text")
+        append_session_message!(sessions_dir, session, message)
+        return session
+    end
 end
 
 function update_session_title!(sessions_dir::String, session_id::String, title::Union{Nothing,String})
-    session = get_session(sessions_dir, session_id)
-    session === nothing && return nothing
-    cleaned = normalize_title(title)
-    if cleaned === nothing
-        fallback = ""
-        if !isempty(session.state.messages)
-            fallback = message_text(session.state.messages[end])
+    return with_session_lock(session_id) do
+        session = get_session(sessions_dir, session_id)
+        session === nothing && return nothing
+        cleaned = normalize_title(title)
+        if cleaned === nothing
+            fallback = ""
+            if !isempty(session.state.messages)
+                fallback = latest_message_text(session.state.messages)
+            end
+            session.title = derive_title(fallback)
+        else
+            session.title = cleaned
         end
-        session.title = derive_title(fallback)
-    else
-        session.title = cleaned
+        session.updated_at = iso_now()
+        save_session!(sessions_dir, session)
+        return session
     end
-    session.updated_at = iso_now()
-    save_session!(sessions_dir, session)
-    return session
 end
 
 function normalize_title(title::Union{Nothing,String})
@@ -511,6 +626,135 @@ function truncate_text(text::AbstractString, max_len::Int)
     return rstrip(first(cleaned, max_len)) * "..."
 end
 
+function compact_text(text::AbstractString)
+    cleaned = strip(text)
+    isempty(cleaned) && return ""
+    return replace(cleaned, r"\s+" => " ")
+end
+
+const TOOL_CALL_SNIPPET_MAX_LEN = 140
+const TOOL_RESULT_SNIPPET_MAX_LEN = 160
+const STREAM_FINAL_ORDER_OFFSET = 10000000000000
+
+function tool_call_request_snippet(entry::ToolCallEntry)
+    args = compact_text(entry.arguments)
+    isempty(args) && return "(no args)"
+    return truncate_text(args, TOOL_CALL_SNIPPET_MAX_LEN)
+end
+
+function tool_call_result_snippet(output::AbstractString)
+    cleaned = compact_text(output)
+    isempty(cleaned) && return "(empty output)"
+    return truncate_text(cleaned, TOOL_RESULT_SNIPPET_MAX_LEN)
+end
+
+function tool_call_full_request(entry::ToolCallEntry)
+    isempty(strip(entry.arguments)) && return entry.name
+    return "$(entry.name)\n$(entry.arguments)"
+end
+
+function format_duration_seconds(duration_ms::Union{Nothing,Int64})
+    duration_ms === nothing && return ""
+    seconds = duration_ms / 1000
+    return string(round(seconds; digits=2), "s")
+end
+
+function split_tool_event_text(text::AbstractString)
+    parts = split(String(text), '\n'; limit=2)
+    title = parts[1]
+    content = length(parts) > 1 ? parts[2] : ""
+    return title, content
+end
+
+function append_session_message!(sessions_dir::String, session::StoredSession, message::Agentif.AgentMessage)
+    return with_session_lock(session.id) do
+        push!(session.state.messages, message)
+        session.updated_at = iso_now()
+        save_session!(sessions_dir, session)
+        return session
+    end
+end
+
+function tool_call_entry_from_message(message::Agentif.AssistantMessage)
+    message.kind == "tool" || return nothing
+    try
+        return JSON.parse(message.text, ToolCallEntry)
+    catch
+        return nothing
+    end
+end
+
+function tool_call_message(entry::ToolCallEntry)
+    return Agentif.AssistantMessage(; text=JSON.json(entry), kind="tool")
+end
+
+function find_tool_call_message_index(messages::Vector{Agentif.AgentMessage}, call_id::String)
+    for (idx, msg) in pairs(messages)
+        msg isa Agentif.AssistantMessage || continue
+        entry = tool_call_entry_from_message(msg)
+        entry === nothing && continue
+        entry.call_id == call_id && return idx
+    end
+    return nothing
+end
+
+function find_tool_call_entry(messages::Vector{Agentif.AgentMessage}, call_id::String)
+    idx = find_tool_call_message_index(messages, call_id)
+    idx === nothing && return nothing
+    message = messages[idx]::Agentif.AssistantMessage
+    return tool_call_entry_from_message(message)
+end
+
+function upsert_tool_call_entry!(sessions_dir::String, session::StoredSession, entry::ToolCallEntry)
+    return with_session_lock(session.id) do
+        messages = session.state.messages
+        idx = find_tool_call_message_index(messages, entry.call_id)
+        if idx === nothing
+            push!(messages, tool_call_message(entry))
+        else
+            msg = messages[idx]::Agentif.AssistantMessage
+            msg.text = JSON.json(entry)
+        end
+        session.updated_at = iso_now()
+        save_session!(sessions_dir, session)
+        return session
+    end
+end
+
+function tool_call_entry_from_request(event::Agentif.ToolCallRequestEvent, existing::Union{Nothing,ToolCallEntry})
+    if existing === nothing
+        return ToolCallEntry(; call_id=event.tool_call.call_id, name=event.tool_call.name, arguments=event.tool_call.arguments, requested_at=event.timestamp)
+    end
+    existing.name = event.tool_call.name
+    existing.arguments = event.tool_call.arguments
+    existing.requested_at = min(existing.requested_at, event.timestamp)
+    return existing
+end
+
+function tool_call_entry_from_start(event::Agentif.ToolExecutionStartEvent, existing::Union{Nothing,ToolCallEntry})
+    entry = existing === nothing ? ToolCallEntry(; call_id=event.tool_call.call_id, name=event.tool_call.name, arguments=event.tool_call.arguments, requested_at=event.timestamp) : existing
+    entry.started_at = event.timestamp
+    return entry
+end
+
+function tool_call_entry_from_end(event::Agentif.ToolExecutionEndEvent, existing::Union{Nothing,ToolCallEntry})
+    entry = existing === nothing ? ToolCallEntry(; call_id=event.tool_call.call_id, name=event.tool_call.name, arguments=event.tool_call.arguments, requested_at=event.timestamp) : existing
+    entry.finished_at = event.timestamp
+    entry.duration_ms = event.duration_ms
+    entry.output = event.result.output
+    entry.is_error = event.result.is_error
+    if entry.started_at === nothing && entry.duration_ms !== nothing
+        entry.started_at = max(0, event.timestamp - entry.duration_ms)
+    end
+    return entry
+end
+
+function append_error_message!(sessions_dir::String, session::StoredSession, message::AbstractString)
+    error_text = isempty(message) ? "Error" : String(message)
+    entry = Agentif.AssistantMessage(; text=error_text, kind="error")
+    return append_session_message!(sessions_dir, session, entry)
+end
+
 function derive_title(prompt::String)
     cleaned = strip(prompt)
     isempty(cleaned) && return "New Session"
@@ -527,7 +771,26 @@ function message_text(msg::Agentif.AgentMessage)
     if msg isa Agentif.UserMessage
         return msg.text
     elseif msg isa Agentif.AssistantMessage
+        msg.kind == "tool" && return ""
         return isempty(msg.text) ? msg.refusal : msg.text
+    end
+    return ""
+end
+
+function string_delta(new_text::String, old_text::String)
+    isempty(old_text) && return new_text
+    new_text == old_text && return ""
+    startswith(new_text, old_text) || return new_text
+    start_idx = nextind(new_text, lastindex(old_text))
+    start_idx > lastindex(new_text) && return ""
+    return new_text[start_idx:end]
+end
+
+function latest_message_text(messages::Vector{Agentif.AgentMessage})
+    for msg in Iterators.reverse(messages)
+        text = message_text(msg)
+        isempty(text) && continue
+        return text
     end
     return ""
 end
@@ -540,7 +803,8 @@ end
 function session_preview(session::StoredSession)
     messages = session.state.messages
     isempty(messages) && return "No messages yet"
-    text = message_text(messages[end])
+    text = latest_message_text(messages)
+    isempty(text) && return "No messages yet"
     return truncate_text(text, 96)
 end
 
@@ -589,6 +853,8 @@ function session_detail(session::StoredSession)
         "pending_user" => session.pending_user,
         "pending_assistant" => session.pending_assistant,
         "pending_reasoning" => session.pending_reasoning,
+        "pending_eval_id" => session.pending_eval_id,
+        "pending_eval_started_at" => session.pending_eval_started_at,
     )
 end
 
@@ -618,8 +884,8 @@ function scheduled_session_detail(session::ScheduledSession)
     )
 end
 
-function default_evaluator(agent::Agentif.Agent, prompt::String, on_event::Function)
-    return Agentif.evaluate(agent, prompt) do event
+function default_evaluator(agent::Agentif.Agent, prompt::String, on_event::Function; append_input::Bool=true)
+    return Agentif.evaluate(agent, prompt; append_input=append_input) do event
         on_event(event)
     end
 end
@@ -628,12 +894,12 @@ function build_http_agent(state::HttpState, session_state::Agentif.AgentState)
     return Agentif.Agent(; prompt=state.agent_config.prompt, model=state.agent_config.model, input_guardrail=nothing, tools=state.tools, apikey=state.agent_config.api_key, state=session_state)
 end
 
-function evaluate_session!(session::StoredSession, agent::Agentif.Agent, prompt::AbstractString; title::Union{Nothing,String}=nothing, on_event::Function=identity, evaluator::Function=default_evaluator)
+function evaluate_session!(session::StoredSession, agent::Agentif.Agent, prompt::AbstractString; title::Union{Nothing,String}=nothing, on_event::Function=identity, evaluator::Function=default_evaluator, append_input::Bool=true)
     error_text = nothing
     result = nothing
     prompt_value = String(prompt)
     try
-        result = evaluator(agent, prompt_value, on_event)
+        result = evaluator(agent, prompt_value, on_event; append_input=append_input)
     catch err
         error_text = sprint(showerror, err)
     end
@@ -648,11 +914,11 @@ function evaluate_session!(session::StoredSession, agent::Agentif.Agent, prompt:
     return session, result, error_text
 end
 
-function evaluate_session!(state::HttpState, session_id::String, prompt::AbstractString; title::Union{Nothing,String}=nothing, on_event::Function=identity, evaluator::Function=default_evaluator)
+function evaluate_session!(state::HttpState, session_id::String, prompt::AbstractString; title::Union{Nothing,String}=nothing, on_event::Function=identity, evaluator::Function=default_evaluator, append_input::Bool=true)
     session = get_session(state.sessions_dir, session_id)
     session === nothing && return nothing, nothing, "session not found"
     agent = build_http_agent(state, session.state)
-    session, result, error_text = evaluate_session!(session, agent, prompt; title=title, on_event=on_event, evaluator=evaluator)
+    session, result, error_text = evaluate_session!(session, agent, prompt; title=title, on_event=on_event, evaluator=evaluator, append_input=append_input)
     save_session!(state.sessions_dir, session)
     return session, result, error_text
 end
@@ -691,7 +957,40 @@ end
 function run_scheduled_session_async!(state::HttpState, session::StoredSession, prompt_value::String; title::Union{Nothing,String}=nothing, scheduled_id::Union{Nothing,String}=nothing)
     errormonitor(Threads.@spawn begin
         agent = build_http_agent(state, session.state)
-        updated, _, error_text = evaluate_session!(session, agent, prompt_value; title=title)
+        logged_error = Ref(false)
+        function on_event(event)
+            if event isa Agentif.MessageUpdateEvent && event.role == :assistant
+                if event.kind == :reasoning
+                    isempty(event.delta) || append_pending_reasoning!(state.sessions_dir, session, event.delta)
+                elseif event.kind == :text || event.kind == :refusal
+                    isempty(event.delta) || append_pending_assistant!(state.sessions_dir, session, event.delta)
+                end
+            elseif event isa Agentif.ToolCallRequestEvent
+                existing = find_tool_call_entry(session.state.messages, event.tool_call.call_id)
+                entry = tool_call_entry_from_request(event, existing)
+                upsert_tool_call_entry!(state.sessions_dir, session, entry)
+            elseif event isa Agentif.ToolExecutionStartEvent
+                existing = find_tool_call_entry(session.state.messages, event.tool_call.call_id)
+                entry = tool_call_entry_from_start(event, existing)
+                upsert_tool_call_entry!(state.sessions_dir, session, entry)
+            elseif event isa Agentif.ToolExecutionEndEvent
+                existing = find_tool_call_entry(session.state.messages, event.tool_call.call_id)
+                entry = tool_call_entry_from_end(event, existing)
+                upsert_tool_call_entry!(state.sessions_dir, session, entry)
+            elseif event isa Agentif.AgentErrorEvent
+                logged_error[] = true
+                append_error_message!(state.sessions_dir, session, "Error: " * sprint(showerror, event.error))
+            end
+            return nothing
+        end
+        mark_session_eval_started!(state.sessions_dir, session)
+        updated, _, error_text = evaluate_session!(session, agent, prompt_value; title=title, on_event=on_event, append_input=false)
+        if error_text !== nothing
+            commit_pending_output!(state.sessions_dir, updated)
+            if !logged_error[]
+                append_error_message!(state.sessions_dir, updated, "Error: " * error_text)
+            end
+        end
         save_session!(state.sessions_dir, updated)
         finalize_session_response!(state.sessions_dir, updated)
         if error_text !== nothing && scheduled_id !== nothing
@@ -705,7 +1004,40 @@ end
 
 function run_scheduled_session_sync!(state::HttpState, session::StoredSession, prompt_value::String; title::Union{Nothing,String}=nothing, scheduled_id::Union{Nothing,String}=nothing)
     agent = build_http_agent(state, session.state)
-    updated, _, error_text = evaluate_session!(session, agent, prompt_value; title=title)
+    logged_error = Ref(false)
+    function on_event(event)
+        if event isa Agentif.MessageUpdateEvent && event.role == :assistant
+            if event.kind == :reasoning
+                isempty(event.delta) || append_pending_reasoning!(state.sessions_dir, session, event.delta)
+            elseif event.kind == :text || event.kind == :refusal
+                isempty(event.delta) || append_pending_assistant!(state.sessions_dir, session, event.delta)
+            end
+        elseif event isa Agentif.ToolCallRequestEvent
+            existing = find_tool_call_entry(session.state.messages, event.tool_call.call_id)
+            entry = tool_call_entry_from_request(event, existing)
+            upsert_tool_call_entry!(state.sessions_dir, session, entry)
+        elseif event isa Agentif.ToolExecutionStartEvent
+            existing = find_tool_call_entry(session.state.messages, event.tool_call.call_id)
+            entry = tool_call_entry_from_start(event, existing)
+            upsert_tool_call_entry!(state.sessions_dir, session, entry)
+        elseif event isa Agentif.ToolExecutionEndEvent
+            existing = find_tool_call_entry(session.state.messages, event.tool_call.call_id)
+            entry = tool_call_entry_from_end(event, existing)
+            upsert_tool_call_entry!(state.sessions_dir, session, entry)
+        elseif event isa Agentif.AgentErrorEvent
+            logged_error[] = true
+            append_error_message!(state.sessions_dir, session, "Error: " * sprint(showerror, event.error))
+        end
+        return nothing
+    end
+    mark_session_eval_started!(state.sessions_dir, session)
+    updated, _, error_text = evaluate_session!(session, agent, prompt_value; title=title, on_event=on_event, append_input=false)
+    if error_text !== nothing
+        commit_pending_output!(state.sessions_dir, updated)
+        if !logged_error[]
+            append_error_message!(state.sessions_dir, updated, "Error: " * error_text)
+        end
+    end
     save_session!(state.sessions_dir, updated)
     finalize_session_response!(state.sessions_dir, updated)
     if error_text !== nothing && scheduled_id !== nothing
@@ -734,6 +1066,25 @@ function html_escape(text::AbstractString)
     return escaped
 end
 
+function html_id_safe(text::AbstractString)
+    return replace(String(text), r"[^A-Za-z0-9_-]" => "-")
+end
+
+function msg_order_attrs(order::Union{Nothing,Int}, timestamp::Union{Nothing,Int})
+    attrs = ""
+    order !== nothing && (attrs *= " style=\"order: $(order)\"")
+    timestamp !== nothing && (attrs *= " data-ts=\"$(timestamp)\"")
+    return attrs
+end
+
+function render_stream_group_html(group_id::String)
+    return """<div class=\"stream-group\" id=\"$(group_id)\"></div>"""
+end
+
+function render_stream_group_oob_html(group_id::String)
+    return """<div hx-swap-oob=\"beforeend:#messages\">$(render_stream_group_html(group_id))</div>"""
+end
+
 function render_user_message_html(content::String, message_id::String)
     text = html_escape(content)
     return """<div class=\"msg msg-user\" id=\"msg-$(message_id)\"><div class=\"msg-bubble\"><div class=\"msg-meta\">You</div><div class=\"msg-text\">$(text)</div></div></div>"""
@@ -743,20 +1094,55 @@ function render_user_message_oob_html(content::String, message_id::String)
     return """<div hx-swap-oob=\"beforeend:#messages\">$(render_user_message_html(content, message_id))</div>"""
 end
 
-function render_assistant_message_html(message_id::String)
-    return """<div class=\"msg msg-assistant\" id=\"msg-$(message_id)\"><div class=\"msg-bubble\"><div class=\"msg-meta\">Vo</div><div class=\"msg-text\" id=\"assistant-text-$(message_id)\"></div><details class=\"msg-thinking\" open><summary>Thinking</summary><pre id=\"assistant-thinking-text-$(message_id)\"></pre></details><div class=\"msg-status\" id=\"assistant-status-$(message_id)\">Streaming...</div></div></div>"""
+function render_assistant_message_html(message_id::String; thinking_html::String="", order::Union{Nothing,Int}=nothing, timestamp::Union{Nothing,Int}=nothing)
+    attrs = msg_order_attrs(order, timestamp)
+    return """<div class=\"msg msg-assistant\" id=\"msg-$(message_id)\"$(attrs)><div class=\"msg-bubble\"><div class=\"msg-meta\">Vo</div><div class=\"msg-text\" id=\"assistant-text-$(message_id)\"></div><div class=\"msg-thinking-slot\" id=\"assistant-thinking-slot-$(message_id)\">$(thinking_html)</div><div class=\"msg-status\" id=\"assistant-status-$(message_id)\">Streaming...</div></div></div>"""
 end
 
-function render_assistant_message_oob_html(message_id::String)
-    return """<div hx-swap-oob=\"beforeend:#messages\">$(render_assistant_message_html(message_id))</div>"""
+function render_assistant_message_oob_html(message_id::String; thinking_html::String="", order::Union{Nothing,Int}=nothing, timestamp::Union{Nothing,Int}=nothing, target_id::String="messages")
+    return """<div hx-swap-oob=\"beforeend:#$(target_id)\">$(render_assistant_message_html(message_id; thinking_html=thinking_html, order=order, timestamp=timestamp))</div>"""
 end
 
-function render_assistant_delta_html(message_id::String, delta::String)
+function render_assistant_thinking_block_html(message_id::String, content::AbstractString="")
+    safe_content = html_escape(content)
+    return """<details class=\"msg-thinking\" open id=\"assistant-thinking-$(message_id)\"><summary>Thinking</summary><pre id=\"assistant-thinking-text-$(message_id)\">$(safe_content)</pre></details>"""
+end
+
+function render_assistant_thinking_block_oob_html(message_id::String, content::AbstractString="")
+    return """<div hx-swap-oob=\"innerHTML:#assistant-thinking-slot-$(message_id)\">$(render_assistant_thinking_block_html(message_id, content))</div>"""
+end
+
+function render_thinking_message_html(message_id::String, content::AbstractString=""; order::Union{Nothing,Int}=nothing, timestamp::Union{Nothing,Int}=nothing)
+    attrs = msg_order_attrs(order, timestamp)
+    safe_content = html_escape(content)
+    return """<div class=\"msg msg-thinking-block\" id=\"msg-$(message_id)\"$(attrs)><div class=\"msg-bubble\"><details class=\"thinking-details\" open><summary>Thinking</summary><pre id=\"thinking-text-$(message_id)\">$(safe_content)</pre></details></div></div>"""
+end
+
+function render_thinking_message_oob_html(message_id::String, content::AbstractString=""; order::Union{Nothing,Int}=nothing, timestamp::Union{Nothing,Int}=nothing, target_id::String="messages")
+    return """<div hx-swap-oob=\"beforeend:#$(target_id)\">$(render_thinking_message_html(message_id, content; order=order, timestamp=timestamp))</div>"""
+end
+
+function render_thinking_delta_html(message_id::String, delta::AbstractString)
+    text = html_escape(delta)
+    return """<span hx-swap-oob=\"beforeend:#thinking-text-$(message_id)\">$(text)</span>"""
+end
+
+function render_assistant_message_content_html(message_id::String, text::AbstractString, reasoning::AbstractString; status_done::Bool=true)
+    thinking_html = isempty(reasoning) ? "" : render_assistant_thinking_block_html(message_id, reasoning)
+    message_html = render_assistant_message_html(message_id; thinking_html=thinking_html)
+    isempty(text) || (message_html = replace(message_html, "<div class=\"msg-text\" id=\"assistant-text-$(message_id)\"></div>" => "<div class=\"msg-text\" id=\"assistant-text-$(message_id)\">$(html_escape(text))</div>"))
+    if status_done
+        message_html = replace(message_html, "<div class=\"msg-status\" id=\"assistant-status-$(message_id)\">Streaming...</div>" => "<div class=\"msg-status done\" id=\"assistant-status-$(message_id)\">Complete</div>")
+    end
+    return message_html
+end
+
+function render_assistant_delta_html(message_id::String, delta::AbstractString)
     text = html_escape(delta)
     return """<span hx-swap-oob=\"beforeend:#assistant-text-$(message_id)\">$(text)</span>"""
 end
 
-function render_assistant_thinking_delta_html(message_id::String, delta::String)
+function render_assistant_thinking_delta_html(message_id::String, delta::AbstractString)
     text = html_escape(delta)
     return """<span hx-swap-oob=\"beforeend:#assistant-thinking-text-$(message_id)\">$(text)</span>"""
 end
@@ -765,15 +1151,81 @@ function render_assistant_done_html(message_id::String)
     return """<div class=\"msg-status done\" hx-swap-oob=\"outerHTML:#assistant-status-$(message_id)\">Complete</div>"""
 end
 
-function render_tool_event_html(title::AbstractString, content::AbstractString)
+function tool_calls_list_id(block_id::String)
+    return "$(block_id)-list"
+end
+
+function tool_call_row_id(block_id::String, call_id::String)
+    safe_id = html_id_safe(call_id)
+    return "$(block_id)-call-$(safe_id)"
+end
+
+function render_tool_call_row_html(block_id::String, entry::ToolCallEntry)
+    row_id = tool_call_row_id(block_id, entry.call_id)
+    executing = entry.started_at !== nothing && entry.finished_at === nothing
+    request_snippet = html_escape(tool_call_request_snippet(entry))
+    request_full = html_escape(tool_call_full_request(entry))
+    result_ready = entry.finished_at !== nothing
+    output_value = entry.output === nothing ? "" : entry.output
+    output_display = isempty(compact_text(output_value)) ? "(empty output)" : output_value
+    output_snippet = html_escape(tool_call_result_snippet(output_display))
+    output_full = html_escape(output_display)
+    duration_text = html_escape(format_duration_seconds(entry.duration_ms))
+    error_class = entry.is_error === true ? " tool-call-error" : ""
+    executing_attr = executing ? "true" : "false"
+    buf = IOBuffer()
+    print(buf, "<div class=\"tool-call-row\" id=\"", row_id, "\" data-executing=\"", executing_attr, "\">")
+    if result_ready
+        print(buf, "<details class=\"tool-call-bubble tool-call-result", error_class, "\">")
+        print(buf, "<summary><span class=\"tool-call-label\">Result</span><span class=\"tool-call-snippet\">", output_snippet, "</span>")
+        isempty(duration_text) || print(buf, "<span class=\"tool-call-duration\">", duration_text, "</span>")
+        print(buf, "</summary><pre class=\"tool-call-full\">", output_full, "</pre></details>")
+    else
+        print(buf, "<div class=\"tool-call-slot tool-call-empty\"></div>")
+    end
+    print(buf, "<details class=\"tool-call-bubble tool-call-request\"><summary><span class=\"tool-call-label\">", html_escape(entry.name), "</span><span class=\"tool-call-snippet\">", request_snippet, "</span><span class=\"tool-call-spinner\"></span></summary><pre class=\"tool-call-full\">", request_full, "</pre></details>")
+    print(buf, "</div>")
+    return String(take!(buf))
+end
+
+function render_tool_calls_list_html(block_id::String, entries::Vector{ToolCallEntry})
+    isempty(entries) && return ""
+    sort!(entries; by=entry -> entry.requested_at)
+    buf = IOBuffer()
+    for entry in entries
+        print(buf, render_tool_call_row_html(block_id, entry))
+    end
+    return String(take!(buf))
+end
+
+function render_tool_calls_list_oob_html(block_id::String, entries::Vector{ToolCallEntry})
+    list_html = render_tool_calls_list_html(block_id, entries)
+    return """<div hx-swap-oob=\"innerHTML:#$(tool_calls_list_id(block_id))\">$(list_html)</div>"""
+end
+
+function render_tool_calls_block_html(block_id::String, entries::Vector{ToolCallEntry}; order::Union{Nothing,Int}=nothing, timestamp::Union{Nothing,Int}=nothing)
+    attrs = msg_order_attrs(order, timestamp)
+    list_html = render_tool_calls_list_html(block_id, entries)
+    return """<div class=\"msg msg-toolcalls\" id=\"$(block_id)\"$(attrs)><div class=\"msg-bubble\"><div class=\"msg-meta\">Tool calls</div><div class=\"tool-call-list\" id=\"$(tool_calls_list_id(block_id))\">$(list_html)</div></div></div>"""
+end
+
+function render_tool_message_html(title::AbstractString, content::AbstractString)
     safe_title = html_escape(title)
     safe_content = html_escape(content)
-    return """<div hx-swap-oob=\"beforeend:#messages\"><div class=\"msg msg-tool\"><div class=\"msg-bubble\"><div class=\"msg-meta\">$(safe_title)</div><pre class=\"msg-code\">$(safe_content)</pre></div></div></div>"""
+    return """<div class=\"msg msg-tool\"><div class=\"msg-bubble\"><div class=\"msg-meta\">$(safe_title)</div><pre class=\"msg-code\">$(safe_content)</pre></div></div>"""
+end
+
+function render_tool_event_html(title::AbstractString, content::AbstractString)
+    return """<div hx-swap-oob=\"beforeend:#messages\">$(render_tool_message_html(title, content))</div>"""
+end
+
+function render_error_message_html(message::AbstractString)
+    safe_message = html_escape(message)
+    return """<div class=\"msg msg-error\"><div class=\"msg-bubble\"><div class=\"msg-meta\">Error</div><div class=\"msg-text\">$(safe_message)</div></div></div>"""
 end
 
 function render_error_html(message::AbstractString)
-    safe_message = html_escape(message)
-    return """<div hx-swap-oob=\"beforeend:#messages\"><div class=\"msg msg-error\"><div class=\"msg-bubble\"><div class=\"msg-meta\">Error</div><div class=\"msg-text\">$(safe_message)</div></div></div></div>"""
+    return """<div hx-swap-oob=\"beforeend:#messages\">$(render_error_message_html(message))</div>"""
 end
 
 function render_agent_status_html(active::Bool=false)
@@ -915,19 +1367,59 @@ function render_scheduled_session_title_edit_html(session::ScheduledSession, ses
     return """<div id=\"scheduled-header\" class=\"session-header\"><div class=\"session-header-row\"><input type=\"text\" name=\"title\" class=\"session-title-input\" value=\"$(title)\" autocomplete=\"off\" hx-put=\"/ui/scheduled/$(session.id)/title\" hx-target=\"#scheduled-header\" hx-swap=\"outerHTML\" hx-trigger=\"keyup[key=='Enter'], blur\">$(run_button)</div><div class=\"session-meta\"><span class=\"session-id\" title=\"$(session.id)\">$(id_label)</span><span class=\"session-updated\">Updated $(updated) (press Enter to save)</span></div></div>"""
 end
 
-function render_messages_html(messages::Vector{Agentif.AgentMessage})
+function render_messages_html(messages::Vector{Agentif.AgentMessage}; start_index::Int=1)
     buf = IOBuffer()
-    for (idx, msg) in enumerate(messages)
-        message_id = "history-$(idx)"
+    message_index = start_index - 1
+    tool_block_entries = ToolCallEntry[]
+    tool_block_index = 0
+    for msg in messages
+        message_index += 1
+        message_id = "history-$(message_index)"
         if msg isa Agentif.UserMessage
+            if !isempty(tool_block_entries)
+                tool_block_index += 1
+                print(buf, render_tool_calls_block_html("tool-calls-history-$(tool_block_index)", tool_block_entries))
+                empty!(tool_block_entries)
+            end
             print(buf, render_user_message_html(msg.text, message_id))
         elseif msg isa Agentif.AssistantMessage
-            message_html = render_assistant_message_html(message_id)
-            message_html = replace(message_html, "<div class=\"msg-text\" id=\"assistant-text-$(message_id)\"></div>" => "<div class=\"msg-text\" id=\"assistant-text-$(message_id)\">$(html_escape(message_text(msg)))</div>")
-            message_html = replace(message_html, "<pre id=\"assistant-thinking-text-$(message_id)\"></pre>" => "<pre id=\"assistant-thinking-text-$(message_id)\">$(html_escape(msg.reasoning))</pre>")
-            message_html = replace(message_html, "<div class=\"msg-status\" id=\"assistant-status-$(message_id)\">Streaming...</div>" => "<div class=\"msg-status done\" id=\"assistant-status-$(message_id)\">Complete</div>")
-            print(buf, message_html)
+            if msg.kind == "tool"
+                entry = tool_call_entry_from_message(msg)
+                if entry === nothing
+                    if !isempty(tool_block_entries)
+                        tool_block_index += 1
+                        print(buf, render_tool_calls_block_html("tool-calls-history-$(tool_block_index)", tool_block_entries))
+                        empty!(tool_block_entries)
+                    end
+                    title, content = split_tool_event_text(msg.text)
+                    print(buf, render_tool_message_html(title, content))
+                else
+                    push!(tool_block_entries, entry)
+                end
+            elseif msg.kind == "error"
+                if !isempty(tool_block_entries)
+                    tool_block_index += 1
+                    print(buf, render_tool_calls_block_html("tool-calls-history-$(tool_block_index)", tool_block_entries))
+                    empty!(tool_block_entries)
+                end
+                print(buf, render_error_message_html(msg.text))
+            else
+                if !isempty(tool_block_entries)
+                    tool_block_index += 1
+                    print(buf, render_tool_calls_block_html("tool-calls-history-$(tool_block_index)", tool_block_entries))
+                    empty!(tool_block_entries)
+                end
+                text_value = message_text(msg)
+                reasoning_value = msg.reasoning
+                isempty(text_value) && isempty(reasoning_value) && continue
+                print(buf, render_assistant_message_content_html(message_id, text_value, reasoning_value; status_done=true))
+            end
         end
+    end
+    if !isempty(tool_block_entries)
+        tool_block_index += 1
+        print(buf, render_tool_calls_block_html("tool-calls-history-$(tool_block_index)", tool_block_entries))
+        empty!(tool_block_entries)
     end
     return String(take!(buf))
 end
@@ -936,29 +1428,33 @@ function render_pending_messages_html(session::StoredSession)
     session.responding || return ""
     buf = IOBuffer()
     if session.pending_user !== nothing
-        print(buf, render_user_message_html(session.pending_user, "pending-user"))
+        last_msg = nothing
+        for msg in Iterators.reverse(session.state.messages)
+            msg isa Agentif.AssistantMessage && msg.kind == "tool" && continue
+            last_msg = msg
+            break
+        end
+        if !(last_msg isa Agentif.UserMessage && last_msg.text == session.pending_user)
+            print(buf, render_user_message_html(session.pending_user, "pending-user"))
+        end
     end
-    if session.pending_assistant !== nothing || session.pending_reasoning !== nothing
-        message_id = "pending-assistant"
-        message_html = render_assistant_message_html(message_id)
-        if session.pending_assistant !== nothing
-            message_html = replace(message_html, "<div class=\"msg-text\" id=\"assistant-text-$(message_id)\"></div>" => "<div class=\"msg-text\" id=\"assistant-text-$(message_id)\">$(html_escape(session.pending_assistant))</div>")
-        end
-        if session.pending_reasoning !== nothing
-            message_html = replace(message_html, "<pre id=\"assistant-thinking-text-$(message_id)\"></pre>" => "<pre id=\"assistant-thinking-text-$(message_id)\">$(html_escape(session.pending_reasoning))</pre>")
-        end
-        print(buf, message_html)
+    assistant_text = session.pending_assistant === nothing ? "" : session.pending_assistant
+    reasoning_text = session.pending_reasoning === nothing ? "" : session.pending_reasoning
+    if !isempty(assistant_text) || !isempty(reasoning_text)
+        print(buf, render_assistant_message_content_html("pending-assistant", assistant_text, reasoning_text; status_done=false))
     end
     return String(take!(buf))
 end
 
-function render_session_view_html(session::StoredSession; run_prompt::Union{Nothing,String}=nothing)
+function render_session_view_html(session::StoredSession; run_eval_id::Union{Nothing,String}=nothing)
     header = render_session_header_html(session)
     messages = render_messages_html(session.state.messages) * render_pending_messages_html(session)
     input = render_prompt_input_html()
-    status = render_agent_status_html(session.responding || run_prompt !== nothing)
-    stream_root = run_prompt === nothing ? "<div id=\"stream-root\" class=\"stream-root\"></div>" : render_sse_shell_html(session.id, run_prompt)
-    return """<div class=\"session-view\" data-session-id=\"$(session.id)\">$(header)<div id=\"messages\" class=\"messages\">$(messages)</div><div class=\"composer\">$(status)<form class=\"prompt-form\" hx-get=\"/ui/sessions/$(session.id)/evaluate\" hx-target=\"#stream-root\" hx-swap=\"outerHTML\">$(input)<div class=\"composer-actions\"><button type=\"submit\" class=\"send-button\">Send</button></div></form></div>$(stream_root)</div>"""
+    active_eval_id = run_eval_id
+    active_eval_id === nothing && session.responding && (active_eval_id = session.pending_eval_id)
+    status = render_agent_status_html(session.responding || active_eval_id !== nothing)
+    stream_root = active_eval_id === nothing ? "<div id=\"stream-root\" class=\"stream-root\"></div>" : render_sse_shell_html(session.id; eval_id=active_eval_id)
+    return """<div class=\"session-view\" data-session-id=\"$(session.id)\">$(header)<div id=\"messages\" class=\"messages\">$(messages)</div><div class=\"composer\">$(status)<form class=\"prompt-form\" hx-post=\"/ui/sessions/$(session.id)/evaluate\" hx-target=\"#stream-root\" hx-swap=\"outerHTML\">$(input)<div class=\"composer-actions\"><button type=\"submit\" class=\"send-button\">Send</button></div></form></div>$(stream_root)</div>"""
 end
 
 function render_session_run_html(session::StoredSession)
@@ -1018,9 +1514,10 @@ function render_zero_state_html()
     return """<div class=\"zero-state\"><div class=\"zero-card\"><h2>Start a session</h2><p>Create a new thread or pick an existing one to review its history.</p></div></div>"""
 end
 
-function render_sse_shell_html(session_id::String, prompt::AbstractString)
-    encoded_prompt = HTTP.URIs.escapeuri(String(prompt))
-    sse_url = "/v1/sessions/$(session_id)/evaluate?prompt=$(encoded_prompt)"
+function render_sse_shell_html(session_id::String; eval_id::Union{Nothing,String}=nothing)
+    eval_id === nothing && throw(ArgumentError("eval_id is required"))
+    encoded_eval_id = HTTP.URIs.escapeuri(String(eval_id))
+    sse_url = "/v1/sessions/$(session_id)/evaluate?eval_id=$(encoded_eval_id)"
     buf = IOBuffer()
     print(buf, "<div id=\"stream-root\" class=\"stream-root\" hx-ext=\"sse\" sse-connect=\"", sse_url, "\">")
     for event_name in (
@@ -1076,92 +1573,252 @@ function parse_form_params(req::HTTP.Request)
     return params
 end
 
-function evaluate_sse!(state::HttpState, session_id::String, prompt::AbstractString; title::Union{Nothing,String}=nothing, stream::HTTP.SSEStream)
+function sse_safe_write!(stream::HTTP.SSEStream, stream_closed::Base.RefValue{Bool}, event_name::String, data::String)
+    stream_closed[] && return nothing
+    isempty(data) && return nothing
+    try
+        write(stream, HTTP.SSEEvent(data; event=event_name))
+    catch
+        stream_closed[] = true
+    end
+    return nothing
+end
+
+function sse_abort!(stream::HTTP.SSEStream, stream_closed::Base.RefValue{Bool}, message::String)
+    sse_safe_write!(stream, stream_closed, "AgentErrorEvent", render_error_html(message) * render_agent_status_oob_html(false))
+    return nothing
+end
+
+function follow_eval_sse!(state::HttpState, session_id::String, eval_id::String, stream::HTTP.SSEStream, stream_closed::Base.RefValue{Bool})
+    session = get_session(state.sessions_dir, session_id)
+    session === nothing && return sse_abort!(stream, stream_closed, "session not found")
+    session.pending_eval_id == eval_id || return sse_abort!(stream, stream_closed, "evaluation not found")
+    messages_html = render_messages_html(session.state.messages) * render_pending_messages_html(session)
+    sse_safe_write!(stream, stream_closed, "MessageUpdateEvent", "<div hx-swap-oob=\"innerHTML:#messages\">$(messages_html)</div>" * render_agent_status_oob_html(session.responding))
+    if !session.responding
+        list_html = render_session_list_html(list_user_sessions(state); active_id=session.id)
+        scheduled_html = render_scheduled_list_html(list_scheduled_sessions(state.scheduled_dir), state.sessions_dir; active_session_id=session.id)
+        header_html = render_session_header_html(session)
+        update_html = """<div hx-swap-oob=\"innerHTML:#session-list\">$(list_html)</div><div hx-swap-oob=\"innerHTML:#scheduled-list\">$(scheduled_html)</div><div hx-swap-oob=\"outerHTML:#session-header\">$(header_html)</div>""" * render_agent_status_oob_html(false)
+        sse_safe_write!(stream, stream_closed, "AgentEvaluateEndEvent", update_html)
+        return nothing
+    end
+    last_message_count = length(session.state.messages)
+    last_pending_assistant = session.pending_assistant === nothing ? "" : session.pending_assistant
+    last_pending_reasoning = session.pending_reasoning === nothing ? "" : session.pending_reasoning
+    pending_visible = !isempty(last_pending_assistant) || !isempty(last_pending_reasoning)
+    thinking_started = !isempty(last_pending_reasoning)
+    while true
+        stream_closed[] && return nothing
+        sleep(0.4)
+        updated = get_session(state.sessions_dir, session_id)
+        updated === nothing && return sse_abort!(stream, stream_closed, "session not found")
+        if length(updated.state.messages) > last_message_count
+            new_messages = updated.state.messages[(last_message_count + 1):end]
+            new_html = render_messages_html(new_messages; start_index=last_message_count + 1)
+            isempty(new_html) || sse_safe_write!(stream, stream_closed, "MessageUpdateEvent", "<div hx-swap-oob=\"beforeend:#messages\">$(new_html)</div>")
+            last_message_count = length(updated.state.messages)
+        end
+        pending_assistant = updated.pending_assistant === nothing ? "" : updated.pending_assistant
+        pending_reasoning = updated.pending_reasoning === nothing ? "" : updated.pending_reasoning
+        pending_present = !isempty(pending_assistant) || !isempty(pending_reasoning)
+        if pending_present && !pending_visible
+            pending_html = render_assistant_message_content_html("pending-assistant", pending_assistant, pending_reasoning; status_done=false)
+            sse_safe_write!(stream, stream_closed, "MessageUpdateEvent", "<div hx-swap-oob=\"beforeend:#messages\">$(pending_html)</div>")
+            pending_visible = true
+            thinking_started = !isempty(pending_reasoning)
+            last_pending_assistant = pending_assistant
+            last_pending_reasoning = pending_reasoning
+        end
+        if pending_present
+            if pending_assistant != last_pending_assistant
+                delta = string_delta(pending_assistant, last_pending_assistant)
+                isempty(delta) || sse_safe_write!(stream, stream_closed, "MessageUpdateEvent", render_assistant_delta_html("pending-assistant", delta))
+                last_pending_assistant = pending_assistant
+            end
+            if pending_reasoning != last_pending_reasoning
+                delta = string_delta(pending_reasoning, last_pending_reasoning)
+                if !isempty(delta)
+                    if !thinking_started
+                        thinking_started = true
+                        sse_safe_write!(stream, stream_closed, "MessageUpdateEvent", render_assistant_thinking_block_oob_html("pending-assistant", delta))
+                    else
+                        sse_safe_write!(stream, stream_closed, "MessageUpdateEvent", render_assistant_thinking_delta_html("pending-assistant", delta))
+                    end
+                end
+                last_pending_reasoning = pending_reasoning
+            end
+        elseif pending_visible
+            sse_safe_write!(stream, stream_closed, "MessageUpdateEvent", "<div hx-swap-oob=\"outerHTML:#msg-pending-assistant\"></div>")
+            pending_visible = false
+            thinking_started = false
+            last_pending_assistant = ""
+            last_pending_reasoning = ""
+        end
+        if !updated.responding
+            list_html = render_session_list_html(list_user_sessions(state); active_id=updated.id)
+            scheduled_html = render_scheduled_list_html(list_scheduled_sessions(state.scheduled_dir), state.sessions_dir; active_session_id=updated.id)
+            header_html = render_session_header_html(updated)
+            update_html = """<div hx-swap-oob=\"innerHTML:#session-list\">$(list_html)</div><div hx-swap-oob=\"innerHTML:#scheduled-list\">$(scheduled_html)</div><div hx-swap-oob=\"outerHTML:#session-header\">$(header_html)</div>""" * render_agent_status_oob_html(false)
+            sse_safe_write!(stream, stream_closed, "AgentEvaluateEndEvent", update_html)
+            return nothing
+        end
+    end
+    return nothing
+end
+
+function evaluate_sse!(state::HttpState, session_id::String; prompt::Union{Nothing,String}=nothing, eval_id::Union{Nothing,String}=nothing, title::Union{Nothing,String}=nothing, stream::HTTP.SSEStream)
     assistant_id = string("assistant-", UUIDs.uuid4())
     user_id = string("user-", UUIDs.uuid4())
     assistant_started = Ref(false)
     assistant_text_started = Ref(false)
-    pending_reasoning = IOBuffer()
+    thinking_started = Ref(false)
+    tool_calls_started = Ref(false)
+    tool_calls = Dict{String,ToolCallEntry}()
+    tool_calls_order = Ref{Union{Nothing,Int}}(nothing)
     stream_closed = Ref(false)
     saw_error = Ref(false)
-    prompt_value = String(prompt)
-    session = begin_session_response!(state.sessions_dir, session_id, prompt_value)
-    session === nothing && return nothing
+    logged_error = Ref(false)
+    prompt_value = ""
+    session = nothing
+    eval_id_value = eval_id
     function safe_write(event_name::String, data::String)
-        stream_closed[] && return nothing
-        isempty(data) && return nothing
-        try
-            write(stream, HTTP.SSEEvent(data; event=event_name))
-        catch
-            stream_closed[] = true
+        sse_safe_write!(stream, stream_closed, event_name, data)
+        return nothing
+    end
+    function abort_with_error(message::String)
+        sse_abort!(stream, stream_closed, message)
+        return nothing
+    end
+    if eval_id !== nothing
+        session = get_session(state.sessions_dir, session_id)
+        session === nothing && return abort_with_error("session not found")
+        session.pending_eval_id == eval_id || return abort_with_error("evaluation not found")
+        if session.pending_eval_started_at !== nothing || !session.responding
+            return follow_eval_sse!(state, session_id, eval_id, stream, stream_closed)
+        end
+        prompt_value = session.pending_user === nothing ? "" : session.pending_user
+        isempty(prompt_value) && return abort_with_error("pending prompt missing")
+        mark_session_eval_started!(state.sessions_dir, session) === nothing && return abort_with_error("evaluation already started")
+    else
+        prompt_value = prompt === nothing ? "" : strip(String(prompt))
+        isempty(prompt_value) && return abort_with_error("prompt is required")
+        session = get_session(state.sessions_dir, session_id)
+        session === nothing && return abort_with_error("session not found")
+        session.responding && return abort_with_error("session is already responding")
+        session = begin_session_response!(state.sessions_dir, session_id, prompt_value)
+        session === nothing && return abort_with_error("session is already responding")
+        mark_session_eval_started!(state.sessions_dir, session)
+    end
+    eval_id_value === nothing && (eval_id_value = session.pending_eval_id)
+    group_token = html_id_safe(String(eval_id_value))
+    stream_group_id = "stream-group-$(group_token)"
+    tool_calls_block_id = "tool-calls-$(group_token)"
+    thinking_id = "thinking-$(group_token)"
+    function ensure_tool_calls_block(timestamp::Int, event_name::String)
+        if tool_calls_order[] === nothing || timestamp < tool_calls_order[]
+            tool_calls_order[] = timestamp
+        end
+        if !tool_calls_started[]
+            tool_calls_started[] = true
+            order_value = tool_calls_order[]
+            block_html = render_tool_calls_block_html(tool_calls_block_id, collect(values(tool_calls)); order=order_value, timestamp=order_value)
+            safe_write(event_name, "<div hx-swap-oob=\"beforeend:#$(stream_group_id)\">$(block_html)</div>")
         end
         return nothing
     end
-    function ensure_assistant_message()
-        assistant_started[] && return nothing
-        safe_write("MessageStartEvent", render_assistant_message_oob_html(assistant_id))
-        assistant_started[] = true
-        if position(pending_reasoning) > 0
-            reasoning_text = String(take!(pending_reasoning))
-            append_pending_reasoning!(state.sessions_dir, session, reasoning_text)
-            safe_write("MessageUpdateEvent", render_assistant_thinking_delta_html(assistant_id, reasoning_text))
-        end
+    function update_tool_calls_list(event_name::String)
+        tool_calls_started[] || return nothing
+        safe_write(event_name, render_tool_calls_list_oob_html(tool_calls_block_id, collect(values(tool_calls))))
         return nothing
     end
     function on_event(event)
         if event isa Agentif.AgentEvaluateStartEvent
-            start_html = render_user_message_oob_html(prompt_value, user_id) * render_agent_status_oob_html(true)
+            start_html = render_user_message_oob_html(prompt_value, user_id) * render_stream_group_oob_html(stream_group_id) * render_agent_status_oob_html(true)
             safe_write("AgentEvaluateStartEvent", start_html)
         elseif event isa Agentif.MessageStartEvent && event.role == :assistant
             return nothing
         elseif event isa Agentif.MessageUpdateEvent && event.role == :assistant
             if event.kind == :reasoning
-                if assistant_started[]
-                    if !isempty(event.delta)
-                        append_pending_reasoning!(state.sessions_dir, session, event.delta)
-                        safe_write("MessageUpdateEvent", render_assistant_thinking_delta_html(assistant_id, event.delta))
-                    end
+                isempty(event.delta) && return nothing
+                append_pending_reasoning!(state.sessions_dir, session, event.delta)
+                if !thinking_started[]
+                    thinking_started[] = true
+                    safe_write("MessageUpdateEvent", render_thinking_message_oob_html(thinking_id, event.delta; order=event.timestamp, timestamp=event.timestamp, target_id=stream_group_id))
                 else
-                    isempty(event.delta) || write(pending_reasoning, event.delta)
+                    safe_write("MessageUpdateEvent", render_thinking_delta_html(thinking_id, event.delta))
                 end
             elseif event.kind == :text || event.kind == :refusal
-                ensure_assistant_message()
-                if !isempty(event.delta)
-                    append_pending_assistant!(state.sessions_dir, session, event.delta)
-                    safe_write("MessageUpdateEvent", render_assistant_delta_html(assistant_id, event.delta))
-                    assistant_text_started[] = true
+                if !assistant_started[]
+                    order_value = event.timestamp + STREAM_FINAL_ORDER_OFFSET
+                    safe_write("MessageStartEvent", render_assistant_message_oob_html(assistant_id; order=order_value, timestamp=event.timestamp, target_id=stream_group_id))
+                    assistant_started[] = true
                 end
+                isempty(event.delta) && return nothing
+                append_pending_assistant!(state.sessions_dir, session, event.delta)
+                safe_write("MessageUpdateEvent", render_assistant_delta_html(assistant_id, event.delta))
+                assistant_text_started[] = true
             end
         elseif event isa Agentif.MessageEndEvent && event.role == :assistant
-            if !assistant_started[] && (position(pending_reasoning) > 0 || !isempty(message_text(event.message)))
-                ensure_assistant_message()
-                if !assistant_text_started[]
-                    final_text = message_text(event.message)
-                    if !isempty(final_text)
-                        append_pending_assistant!(state.sessions_dir, session, final_text)
-                        safe_write("MessageUpdateEvent", render_assistant_delta_html(assistant_id, final_text))
-                    end
-                end
+            final_text = message_text(event.message)
+            final_reasoning = event.message.reasoning
+            if !thinking_started[] && !isempty(final_reasoning)
+                append_pending_reasoning!(state.sessions_dir, session, final_reasoning)
+                thinking_started[] = true
+                safe_write("MessageUpdateEvent", render_thinking_message_oob_html(thinking_id, final_reasoning; order=event.timestamp, timestamp=event.timestamp, target_id=stream_group_id))
             end
-            assistant_started[] && safe_write("MessageEndEvent", render_assistant_done_html(assistant_id))
+            if !assistant_started[] && (!isempty(final_text) || !isempty(final_reasoning))
+                order_value = event.timestamp + STREAM_FINAL_ORDER_OFFSET
+                safe_write("MessageStartEvent", render_assistant_message_oob_html(assistant_id; order=order_value, timestamp=event.timestamp, target_id=stream_group_id))
+                assistant_started[] = true
+            end
+            if assistant_started[]
+                if !assistant_text_started[] && !isempty(final_text)
+                    append_pending_assistant!(state.sessions_dir, session, final_text)
+                    safe_write("MessageUpdateEvent", render_assistant_delta_html(assistant_id, final_text))
+                    assistant_text_started[] = true
+                end
+                safe_write("MessageEndEvent", render_assistant_done_html(assistant_id))
+            end
         elseif event isa Agentif.ToolCallRequestEvent
-            title_text = "Tool call requested: $(event.tool_call.name)"
-            safe_write("ToolCallRequestEvent", render_tool_event_html(title_text, event.tool_call.arguments))
+            existing = get(() -> nothing, tool_calls, event.tool_call.call_id)
+            entry = tool_call_entry_from_request(event, existing)
+            tool_calls[event.tool_call.call_id] = entry
+            upsert_tool_call_entry!(state.sessions_dir, session, entry)
+            ensure_tool_calls_block(event.timestamp, "ToolCallRequestEvent")
+            update_tool_calls_list("ToolCallRequestEvent")
         elseif event isa Agentif.ToolExecutionStartEvent
-            title_text = "Tool execution: $(event.tool_call.name)"
-            safe_write("ToolExecutionStartEvent", render_tool_event_html(title_text, event.tool_call.arguments))
+            existing = get(() -> nothing, tool_calls, event.tool_call.call_id)
+            entry = tool_call_entry_from_start(event, existing)
+            tool_calls[event.tool_call.call_id] = entry
+            upsert_tool_call_entry!(state.sessions_dir, session, entry)
+            ensure_tool_calls_block(event.timestamp, "ToolExecutionStartEvent")
+            update_tool_calls_list("ToolExecutionStartEvent")
         elseif event isa Agentif.ToolExecutionEndEvent
-            title_text = "Tool result: $(event.tool_call.name)"
-            output_text = truncate_text(event.result.output, 1200)
-            safe_write("ToolExecutionEndEvent", render_tool_event_html(title_text, output_text))
+            existing = get(() -> nothing, tool_calls, event.tool_call.call_id)
+            entry = tool_call_entry_from_end(event, existing)
+            tool_calls[event.tool_call.call_id] = entry
+            upsert_tool_call_entry!(state.sessions_dir, session, entry)
+            ensure_tool_calls_block(event.timestamp, "ToolExecutionEndEvent")
+            update_tool_calls_list("ToolExecutionEndEvent")
         elseif event isa Agentif.AgentErrorEvent
             saw_error[] = true
-            safe_write("AgentErrorEvent", render_error_html(sprint(showerror, event.error)) * render_agent_status_oob_html(false))
+            error_text = sprint(showerror, event.error)
+            append_error_message!(state.sessions_dir, session, "Error: " * error_text)
+            logged_error[] = true
+            safe_write("AgentErrorEvent", render_error_html(error_text) * render_agent_status_oob_html(false))
         end
         return nothing
     end
     agent = build_http_agent(state, session.state)
-    session, result, error_text = evaluate_session!(session, agent, prompt_value; title=title, on_event=on_event)
+    session, result, error_text = evaluate_session!(session, agent, prompt_value; title=title, on_event=on_event, append_input=false)
+    if error_text !== nothing
+        commit_pending_output!(state.sessions_dir, session)
+        if !logged_error[]
+            append_error_message!(state.sessions_dir, session, "Error: " * error_text)
+            logged_error[] = true
+        end
+    end
     finalize_session_response!(state.sessions_dir, session)
     if error_text !== nothing && !saw_error[]
         safe_write("AgentErrorEvent", render_error_html(error_text) * render_agent_status_oob_html(false))
@@ -1305,7 +1962,9 @@ function build_http_router(state::HttpState)
         error_text !== nothing && return html_response("", status=409)
         session = new_session(state.sessions_dir; title=scheduled.title)
         add_scheduled_session_run!(state.scheduled_dir, scheduled, session.id)
-        view_html = render_session_view_html(session; run_prompt=prompt_value)
+        session = begin_session_response!(state.sessions_dir, session.id, prompt_value)
+        session === nothing && return html_response("", status=409)
+        view_html = render_session_view_html(session; run_eval_id=session.pending_eval_id)
         scheduled_html = render_scheduled_list_html(list_scheduled_sessions(state.scheduled_dir), state.sessions_dir; active_session_id=session.id)
         session_list_html = render_session_list_html(list_user_sessions(state); active_id=nothing)
         body = """$(view_html)<div hx-swap-oob=\"innerHTML:#scheduled-list\">$(scheduled_html)</div><div hx-swap-oob=\"innerHTML:#session-list\">$(session_list_html)</div>"""
@@ -1379,14 +2038,17 @@ function build_http_router(state::HttpState)
         body = """$(scheduled_html)<div hx-swap-oob=\"innerHTML:#session-list\">$(session_list_html)</div><div hx-swap-oob=\"innerHTML:#session-view\">$(zero_html)</div>"""
         return html_response(body)
     end)
-    HTTP.register!(router, "GET", "/ui/sessions/{session_id}/evaluate", function (req)
+    HTTP.register!(router, "POST", "/ui/sessions/{session_id}/evaluate", function (req)
         session_id = HTTP.getparams(req)["session_id"]
-        get_session(state.sessions_dir, session_id) === nothing && return html_response("", status=404)
-        prompt = parse_query_param(req, "prompt")
-        prompt === nothing && return html_response("", status=400)
-        prompt_value = strip(prompt)
+        session = get_session(state.sessions_dir, session_id)
+        session === nothing && return html_response("", status=404)
+        prompt = parse_form_param(req, "prompt")
+        prompt_value = prompt === nothing ? "" : strip(prompt)
         isempty(prompt_value) && return html_response("", status=400)
-        return html_response(render_sse_shell_html(session_id, prompt_value))
+        session.responding && return html_response(render_error_html("Session is already responding.") * render_agent_status_oob_html(false))
+        session = begin_session_response!(state.sessions_dir, session_id, prompt_value)
+        session === nothing && return html_response(render_error_html("Session is already responding.") * render_agent_status_oob_html(false))
+        return html_response(render_sse_shell_html(session_id; eval_id=session.pending_eval_id))
     end)
     Servo.@GET(router, "/v1/sessions", function list_sessions_route()
         return api_list_sessions(state)
@@ -1423,15 +2085,18 @@ function build_http_router(state::HttpState)
     end)
     HTTP.register!(router, "GET", "/v1/sessions/{session_id}/evaluate", function (req)
         session_id = HTTP.getparams(req)["session_id"]
+        eval_id = parse_query_param(req, "eval_id")
         prompt = parse_query_param(req, "prompt")
         title = normalize_title(parse_query_param(req, "title"))
         prompt_value = prompt === nothing ? "" : strip(prompt)
-        isempty(prompt_value) && return HTTP.Response(400, "prompt is required")
+        if eval_id === nothing
+            isempty(prompt_value) && return HTTP.Response(400, "prompt is required")
+        end
         response = HTTP.Response(200)
         stream = HTTP.sse_stream(response)
         errormonitor(Threads.@spawn begin
             try
-                evaluate_sse!(state, session_id, prompt_value; title=title, stream=stream)
+                evaluate_sse!(state, session_id; prompt=prompt_value, eval_id=eval_id, title=title, stream=stream)
             finally
                 close(stream)
             end
@@ -1454,7 +2119,7 @@ function build_http_router(state::HttpState)
         stream = HTTP.sse_stream(response)
         errormonitor(Threads.@spawn begin
             try
-                evaluate_sse!(state, session_id, prompt_value; title=title, stream=stream)
+                evaluate_sse!(state, session_id; prompt=prompt_value, title=title, stream=stream)
             finally
                 close(stream)
             end
