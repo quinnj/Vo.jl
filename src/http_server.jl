@@ -1175,6 +1175,7 @@ function render_tool_call_row_html(block_id::String, entry::ToolCallEntry)
     executing_attr = executing ? "true" : "false"
     buf = IOBuffer()
     print(buf, "<div class=\"tool-call-row\" id=\"", row_id, "\" data-executing=\"", executing_attr, "\">")
+    print(buf, "<details class=\"tool-call-bubble tool-call-request\"><summary><span class=\"tool-call-label\">", html_escape(entry.name), "</span><span class=\"tool-call-snippet\">", request_snippet, "</span><span class=\"tool-call-spinner\"></span></summary><pre class=\"tool-call-full\">", request_full, "</pre></details>")
     if result_ready
         print(buf, "<details class=\"tool-call-bubble tool-call-result", error_class, "\">")
         print(buf, "<summary><span class=\"tool-call-label\">Result</span><span class=\"tool-call-snippet\">", output_snippet, "</span>")
@@ -1183,7 +1184,6 @@ function render_tool_call_row_html(block_id::String, entry::ToolCallEntry)
     else
         print(buf, "<div class=\"tool-call-slot tool-call-empty\"></div>")
     end
-    print(buf, "<details class=\"tool-call-bubble tool-call-request\"><summary><span class=\"tool-call-label\">", html_escape(entry.name), "</span><span class=\"tool-call-snippet\">", request_snippet, "</span><span class=\"tool-call-spinner\"></span></summary><pre class=\"tool-call-full\">", request_full, "</pre></details>")
     print(buf, "</div>")
     return String(take!(buf))
 end
